@@ -107,7 +107,7 @@ $(cat $DARRC)
 
 EOV
     fi
-    run dar -B $DARRC "$@"
+    run dar "$@" -B $DARRC
     rm -f $DARRC
 }
 
