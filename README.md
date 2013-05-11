@@ -29,8 +29,8 @@ When I tried to restore my DVD backup from six years ago, made with dar and par2
 Solutions
 ---------
 
-We use [http://dar.linux.free.fr](dar) and
-[http://en.wikipedia.org/wiki/Parchive](par)2 because they work well and are
+We use [dar](http://dar.linux.free.fr) and
+[par](http://en.wikipedia.org/wiki/Parchive) 2 because they work well and are
 stable over a period of years. We guard against localized disc errors by using
 dar slice files smaller than the disc. We guard against the loss of an entire
 disc by using heavy redundancy with the aid of par2. We guard against forgetful
