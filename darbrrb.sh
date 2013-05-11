@@ -93,9 +93,9 @@ dar_ () {
 -v
 
 create:
-        -E bash "$0" _create %p %b %N %e %c
+    -E "bash $0 _create %p %b %N %e %c"
 test:
-        -E bash "$0" _test %p %b %N %e %c
+    -E "bash $0 _test %p %b %N %e %c"
 
 EODARRC
     if [ $VERBOSE = 1 ]; then
@@ -142,7 +142,7 @@ _test () {
 }
 
 deal_with_args () {
-    echo "dealing with args $*"
+    [ $VERBOSE = 1 ] && echo "dealing with args $*"
     case "$1" in
         -h|-help|--help)
             usage
