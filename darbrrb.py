@@ -81,6 +81,7 @@ import tempfile
 import contextlib
 import unittest
 import io
+import pdb
 try:
     from unittest.mock import Mock, patch, sentinel, call
 except ImportError:
@@ -189,14 +190,20 @@ You may need to do a bit of hunting, then, to find a given slice, but if some
 data is irretrievable from one of the discs, or some discs are missing, you
 should be able to piece the slices back together.
 
+To restore some files: first, make a directory somewhere with at least
+{s.scratch_free_needed} MiB free. Copy the first and last slice of the backup
+into your directory. Do some more stuff.
+
 """.format(s=self.settings, contents=self.darrc_contents)
+    # FIXME
 
 
 
     def dar(self, *args):
         # Perhaps darrc files can be non-ascii, but we haven't got any
         # non-ascii arguments to give here, so we'll stay on the safe side.
-        with tempfile.NamedTemporaryFile('w', encoding='ascii') as darrc_file:
+        with open(os.path.join(self.settings.scratch_dir, 'darrc'),
+                  'w', encoding='ascii') as darrc_file:
             if self.settings.verbose:
                 print("""
 vvvvvvvv Contents of darrc file {name}:     vvvvvvvvvvv
@@ -264,8 +271,8 @@ vvvvvvvv Contents of darrc file {name}:     vvvvvvvvvvv
         number = int(number)
         # note: dar has caused this function to be called; dar's cwd is
         # SCRATCH_DIR, hence so is ours
-        dar_files = glob.glob('*.dar')
-        par_volumes = glob.glob('*.vol*.par2')
+        dar_files = sorted(glob.glob('*.dar'))
+        par_volumes = sorted(glob.glob('*.vol*.par2'))
 
         if len(dar_files) >= self.settings.data_discs or \
                 happening == 'last_slice':
@@ -279,96 +286,96 @@ vvvvvvvv Contents of darrc file {name}:     vvvvvvvvvvv
                 print("I feel funny. Why is this happening to me?",
                         file=sys.stderr)
             for f, d in zip(files_to_distribute, dirs):
-                shutil.copyfile(par2filename, d)
+                shutil.copyfile(par2filename, os.path.join(d, par2filename))
                 shutil.move(f, d)
                 with io.open(os.path.join(d, 'README.txt'), 'wt') as readme:
                     readme.write(self.readme)
             self.burn_and_remove_all()
 
 
-
-
-# we can't use a usual mock for this, because mocks have a name
-# attribute that means something else besides what a
-# NamedTemporaryFile's name attribute means, and we can't mock that
-# attribute.
-class FunTempFile:
-    name = 'zobefuosfewboeuf'
-    def __init__(self, *args, **kwargs):
-        pass
-    def __enter__(self, *args, **kwargs):
-        return self
-    def __exit__(self, *args, **kwargs):
-        pass
-    def write(self, *args, **kwargs):
-        pass
-    def flush(self, *args, **kwargs):
-        pass
-
-
-class TestDarbrrbFourPlusOne(unittest.TestCase):
+class UsesTempScratchDir(unittest.TestCase):
     def setUp(self):
         self.settings = Settings()
+        tempdir = tempfile.mkdtemp('darbrrb_test')
+        self.old_tempfile_tempdir = tempfile.tempdir
+        tempfile.tempdir = tempdir
+        self.settings.scratch_dir = tempdir
+    
+    def tearDown(self):
+        shutil.rmtree(self.settings.scratch_dir)
+        tempfile.tempdir = self.old_tempfile_tempdir
+
+    def mkdirp_parents(self, *names):
+        for name in names:
+            dir, file = os.path.split(name)
+            where = self.settings.scratch_dir
+            for d in dir.split(os.path.sep):
+                new = os.path.join(where, d)
+                if not os.path.exists(new):
+                    os.mkdir(new)
+                where = new
+    
+    def touch(self, *filenames):
+        self.mkdirp_parents(*filenames)
+        for name in filenames:
+            with open(name, 'wt') as f:
+                print('*', file=f)
+
+    def mkdirp(self, *dirnames):
+        self.mkdirp_parents(*dirnames)
+        for name in dirnames:
+            if not os.path.exists(name):
+                os.mkdir(name)
+
+
+
+@patch.object(Darbrrb, '_run')
+@patch.object(Darbrrb, 'wait_for_empty_disc')
+class TestDarbrrbFourPlusOne(UsesTempScratchDir):
+    def setUp(self):
+        super().setUp()
         self.settings.data_discs = 4
         self.settings.parity_discs = 1
         self.settings.burner_device = '/dev/zero'
         self.d = Darbrrb(self.settings, 'fnord')
-        self.d._run = Mock()
-        super().setUp()
 
-    def testInvokeDar(self):
-        self.d.settings.scratch_dir = sentinel.scratch_dir
-        with patch('os.chdir') as chdir, \
-                patch('os.getcwd', return_value=sentinel.oldcwd) as getcwd, \
-                patch('tempfile.NamedTemporaryFile', new=FunTempFile) as ntf:
-            self.d.dar('-c', 'basename', '-R', '/home/bla/photos')
-            chdir.assert_has_calls([call(sentinel.scratch_dir),
-                    call(sentinel.oldcwd)])
-            self.d._run.assert_called_with(
-                    'dar', '-c', 'basename', '-R', '/home/bla/photos',
-                    '-B', FunTempFile.name)
+    @patch('os.chdir')
+    @patch('os.getcwd', return_value='/zart')
+    def testWorkingDirectory(self, getcwd, chdir, wfed, _run):
+        with working_directory('/fnord'):
+            pass
+        chdir.assert_has_calls([call('/fnord'),
+                                call('/zart')])
 
-    def testFirstDiscOfSet(self):
-        def mock_glob(arg):
-            if arg == '*.dar':
-                return ['thing.0001.dar']
-            else:
-                return []
-        with patch('shutil.move') as move, \
-                patch('shutil.copyfile') as copyfile, \
-                patch('os.unlink') as unlink, \
-                patch('glob.glob', side_effect=mock_glob) as glob:
+    def testInvokeDar(self, wfed, _run):
+        self.d.dar('-c', 'basename', '-R', '/home/bla/photos')
+        self.d._run.assert_called_with(
+                'dar', '-c', 'basename', '-R', '/home/bla/photos',
+                '-B', os.path.join(self.settings.scratch_dir, 'darrc'))
+
+    def testFirstDiscOfSet(self, wfed, _run):
+        with working_directory(self.settings.scratch_dir):
+            self.touch('thing.0001.dar')
+            everything = list(os.walk(self.settings.scratch_dir))
             self.d._create('dir', 'thing', '1', 'dar', 'operating')
-            self.assertFalse(move.called)
-            self.assertFalse(copyfile.called)
-            self.assertFalse(unlink.called)
-            self.assertFalse(self.d._run.called)
+            everything2 = list(os.walk(self.settings.scratch_dir))
+            self.assertEqual(everything, everything2)
 
-    def testLastDiscOfSet(self):
-        def mock_glob(arg):
-            if arg == '*.dar':
-                return ['thing.0001.dar', 'thing.0002.dar', 'thing.0003.dar',
-                        'thing.0004.dar']
-            elif arg == '*.vol*.par2':
-                return ['thing.0001-0004.vol000+500.par2']
-            elif arg == '__disc*':
-                return ['__disc1', '__disc2', '__disc3', '__disc4', '__disc5']
-            else:
-                return []
-        self.d.wait_for_empty_disc = lambda: None
-        with patch('shutil.move') as move, \
-                patch('shutil.copyfile') as copyfile, \
-                patch('os.unlink') as unlink, \
-                patch('glob.glob', side_effect=mock_glob) as glob, \
-                patch('io.open', new=FunTempFile) as open:
+    def testLastDiscOfSet(self, wfed, _run):
+        with working_directory(self.settings.scratch_dir):
+            self.mkdirp('__disc1', '__disc2', '__disc3', '__disc4', '__disc5')
+            self.touch( 'thing.0001.dar', 'thing.0002.dar', 'thing.0003.dar',
+                        'thing.0004.dar')
+            # this is a bit odd, but the alternative is to come up with an 
+            # overcomplicated _run mock
+            self.touch( 'thing.0001-0004.par2',
+                        'thing.0001-0004.vol000+500.par2')
             self.d._create('dir', 'thing', '4', 'dar', 'operating')
             self.d._run.assert_any_call(
                     'par2', 'c', '-n1', '-u', '-r25',
                     'thing.0001-0004.par2',
                     'thing.0001.dar', 'thing.0002.dar',
                     'thing.0003.dar', 'thing.0004.dar')
-            self.assertTrue(move.called)
-            self.assertTrue(copyfile.called)
             self.d._run.assert_has_calls([
                 call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc1'),
                 call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc2'),
@@ -376,94 +383,64 @@ class TestDarbrrbFourPlusOne(unittest.TestCase):
                 call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc4'),
                 call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc5')])
             
+    def testLastDiscOfBackupNotEven(self, wfed, _run):
+        with working_directory(self.settings.scratch_dir):
+            self.mkdirp('__disc1', '__disc2', '__disc3', '__disc4', '__disc5')
+            self.touch( 'thing.0013.dar', 'thing.0014.dar')
+            # this is a bit odd, but the alternative is to come up with an 
+            # overcomplicated _run mock
+            self.touch( 'thing.0013-0014.par2',
+                        'thing.0013-0014.vol000+200.par2')
+            self.d._create('dir', 'thing', '14', 'dar', 'last_slice')
+            self.d._run.assert_any_call(
+                    'par2', 'c', '-n1', '-u', '-r50',
+                    'thing.0013-0014.par2',
+                    'thing.0013.dar', 'thing.0014.dar')
+            self.d._run.assert_has_calls([
+                call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc1'),
+                call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc2')])
+            
 
-class TestDarbrrbThreePlusEight(unittest.TestCase):
+
+@patch.object(Darbrrb, '_run')
+@patch.object(Darbrrb, 'wait_for_empty_disc')
+class TestDarbrrbThreePlusEight(UsesTempScratchDir):
     def setUp(self):
-        self.settings = Settings()
+        super().setUp()
         self.settings.data_discs = 3
         self.settings.parity_discs = 8
         self.settings.burner_device = '/dev/zero'
         self.d = Darbrrb(self.settings, 'fnord')
-        self.d._run = Mock()
-        super().setUp()
 
-    def testInvokeDar(self):
-        self.d.settings.scratch_dir = sentinel.scratch_dir
-        # we can't use a usual mock for this, because mocks have a name
-        # attribute that means something else besides what a
-        # NamedTemporaryFile's name attribute means, and we can't mock that
-        # attribute.
-        class FunTempFile:
-            name = 'zobefuosfewboeuf'
-            def __init__(self, *args, **kwargs):
-                pass
-            def __enter__(self, *args, **kwargs):
-                return self
-            def __exit__(self, *args, **kwargs):
-                pass
-            def write(self, *args, **kwargs):
-                pass
-            def flush(self, *args, **kwargs):
-                pass
-        with patch('os.chdir') as chdir, \
-                patch('os.getcwd', return_value=sentinel.oldcwd) as getcwd, \
-                patch('tempfile.NamedTemporaryFile', new=FunTempFile) as ntf:
-            self.d.dar('-c', 'basename', '-R', '/home/bla/photos')
-            chdir.assert_has_calls([call(sentinel.scratch_dir),
-                    call(sentinel.oldcwd)])
-            self.d._run.assert_called_with(
-                    'dar', '-c', 'basename', '-R', '/home/bla/photos',
-                    '-B', FunTempFile.name)
-
-    def testFirstDiscOfSet(self):
-        def mock_glob(arg):
-            if arg == '*.dar':
-                return ['thing.0001.dar']
-            else:
-                return []
-        with patch('shutil.move') as move, \
-                patch('shutil.copyfile') as copyfile, \
-                patch('os.unlink') as unlink, \
-                patch('glob.glob', side_effect=mock_glob) as glob:
+    def testFirstDiscOfSet(self, wfed, _run):
+        with working_directory(self.settings.scratch_dir):
+            self.touch('thing.0001.dar')
+            everything = list(os.walk(self.settings.scratch_dir))
             self.d._create('dir', 'thing', '1', 'dar', 'operating')
-            self.assertFalse(move.called)
-            self.assertFalse(copyfile.called)
-            self.assertFalse(unlink.called)
-            self.assertFalse(self.d._run.called)
+            everything2 = list(os.walk(self.settings.scratch_dir))
+            self.assertEqual(everything, everything2)
 
-    def testLastDiscOfSet(self):
-        def mock_glob(arg):
-            if arg == '*.dar':
-                return ['thing.0001.dar', 'thing.0002.dar', 'thing.0003.dar']
-            elif arg == '*.vol*.par2':
-                return ['thing.0001-0003.vol000+100.par2',
-                        'thing.0001-0003.vol000+200.par2',
-                        'thing.0001-0003.vol000+300.par2',
-                        'thing.0001-0003.vol000+400.par2',
-                        'thing.0001-0003.vol000+500.par2',
-                        'thing.0001-0003.vol000+600.par2',
-                        'thing.0001-0003.vol000+700.par2',
-                        'thing.0001-0003.vol000+800.par2']
-            elif arg == '__disc*':
-                return ['__disc1', '__disc2', '__disc3', '__disc4', '__disc5',
-                        '__disc6', '__disc7', '__disc8', '__disc9', '__disc10',
-                        '__disc11']
-            else:
-                return []
-        self.d.wait_for_empty_disc = lambda: None
-        with patch('shutil.move') as move, \
-                patch('shutil.copyfile') as copyfile, \
-                patch('os.unlink') as unlink, \
-                patch('glob.glob', side_effect=mock_glob) as glob, \
-                patch('io.open', new=FunTempFile) as open:
+    def testLastDiscOfSet(self, wfed, _run):
+        with working_directory(self.settings.scratch_dir):
+            self.mkdirp( '__disc1', '__disc2', '__disc3', '__disc4', '__disc5',
+                         '__disc6', '__disc7', '__disc8', '__disc9',
+                         '__disc10', '__disc11')
+            self.touch( 'thing.0001.dar', 'thing.0002.dar', 'thing.0003.dar')
+            self.touch( 'thing.0001-0003.par2',
+                    'thing.0001-0003.vol000+100.par2',
+                    'thing.0001-0003.vol000+200.par2',
+                    'thing.0001-0003.vol000+300.par2',
+                    'thing.0001-0003.vol000+400.par2',
+                    'thing.0001-0003.vol000+500.par2',
+                    'thing.0001-0003.vol000+600.par2',
+                    'thing.0001-0003.vol000+700.par2',
+                    'thing.0001-0003.vol000+800.par2')
             self.d._create('dir', 'thing', '3', 'dar', 'operating')
             self.d._run.assert_any_call(
                     'par2', 'c', '-n8', '-u', '-r266',
                     'thing.0001-0003.par2',
                     'thing.0001.dar', 'thing.0002.dar',
                     'thing.0003.dar')
-            self.assertTrue(move.called)
-            self.assertTrue(copyfile.called)
             for disc in range(1, 8+1):
                 self.d._run.assert_any_call(
                     'growisofs', '-Z', '/dev/zero',
