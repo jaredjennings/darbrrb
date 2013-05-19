@@ -81,7 +81,6 @@ import tempfile
 import contextlib
 import unittest
 import io
-import pdb
 try:
     from unittest.mock import Mock, patch, sentinel, call
 except ImportError:
