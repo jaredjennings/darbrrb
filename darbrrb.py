@@ -303,8 +303,11 @@ vvvvvvvv Contents of darrc file {name}:     vvvvvvvvvvv
                 shutil.move(f, d)
                 with io.open(os.path.join(d, 'README.txt'), 'wt') as readme:
                     readme.write(self.readme)
+                this_program = os.path.basename(self.progname)
+                shutil.copyfile(this_program, os.path.join(d, this_program))
             os.unlink(par2filename)
-        dars_on_discs = len(glob.glob(os.path.join(self.disc_dir(1), '*')))
+        dars_on_discs = len(glob.glob(
+                os.path.join(self.disc_dir(1), '*.dar')))
         size_if_we_dont_burn = (dars_on_discs + 1) * \
                 self.settings.slice_size + \
                 self.settings.reserve_space
@@ -353,21 +356,30 @@ class UsesTempScratchDir(unittest.TestCase):
             if not os.path.exists(name):
                 os.mkdir(name)
 
+    @property
+    def dar_filename_format(self):
+        return '{{}}.{}.dar'.format(self.settings.number_format)
+
     def touch_dar_files(self, basename, min, max):
-        format_string = '{}.{}.dar'.format(basename, 
-                self.settings.number_format)
-        self.touch(*(format_string.format(n) for n in range(min, max+1)))
+        self.touch(*(self.dar_filename_format.format(basename,n)
+                for n in range(min, max+1)))
+
+    @property
+    def par_main_format(self):
+        return '{{}}.{0}-{0}.par2'.format(self.settings.number_format)
+
+    @property
+    def par_volume_format(self):
+        return '{{}}.{0}-{0}.vol{1}+{1}.par2'.format(
+                self.settings.number_format, '{:03d}')
 
     def touch_par_files(self, basename, min, max, count):
         volumes_per_file = 500 // count
-        main = '{0}.{1}-{1}.par2'.format(basename,
-                self.settings.number_format)
-        vols = '{0}.{1}-{1}.vol{2}+{2}.par2'.format(basename,
-                self.settings.number_format, '{:03d}')
-        self.touch(main.format(min, max))
+        self.touch(self.par_main_format.format(basename, min, max))
         first_vol = 0
         for i in range(count):
-            self.touch(vols.format(min, max, first_vol, volumes_per_file))
+            self.touch(self.par_volume_format.format(basename, min, max,
+                    first_vol, volumes_per_file))
 
 
 class TestWorkingDirectoryContextManager(unittest.TestCase):
@@ -405,20 +417,26 @@ class TestDarbrrbInvokeDar(UsesTempScratchDir):
 @patch.object(Darbrrb, '_run')
 @patch.object(Darbrrb, 'wait_for_empty_disc')
 class TestDarbrrbFourPlusOne(UsesTempScratchDir):
-    @patch.object(Darbrrb, 'scratch_mib_free', return_value=(30000*5))
-    def setUp(self, smf):
+    data_discs = 4
+    parity_discs = 1
+    slices_per_disc = 5
+    pretend_free_space = (data_discs + parity_discs) * 25000
+
+    def setUp(self):
         super().setUp()
-        self.settings.data_discs = 4
-        self.settings.parity_discs = 1
-        self.settings.slices_per_disc = 5
+        self.settings.data_discs = self.data_discs
+        self.settings.parity_discs = self.parity_discs
+        self.settings.slices_per_disc = self.slices_per_disc
         self.settings.burner_device = '/dev/zero'
-        self.d = Darbrrb(self.settings, __file__)
         # in our tests, _create is called, as though dar were invoking this
         # script; when dar does that, it's with the scratch dir as the cwd,
         # as tested above
-        self.d.ensure_scratch()
-        self.cwd = os.getcwd()
-        os.chdir(self.settings.scratch_dir)
+        with patch.object(Darbrrb, 'scratch_mib_free',
+                return_value=self.pretend_free_space):
+            self.d = Darbrrb(self.settings, __file__)
+            self.d.ensure_scratch()
+            self.cwd = os.getcwd()
+            os.chdir(self.settings.scratch_dir)
 
     def tearDown(self):
         super().tearDown()
@@ -460,7 +478,6 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
         self.assertEqual(self.d._run.call_count, 4)
 
     def testWholeBackup(self, wfed, _run):
-        slice = 1
         dir = 'dir'
         bn = 'whole'
         discs_burned = []
@@ -478,6 +495,7 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
                         sorted(glob.glob(os.path.join(dir, '*')))))
                 discs_burned.append(files_burned)
         _run.side_effect = crazy_run
+        slice = 1
         # two whole redundancy sets
         for redundancy_set in range(complete_redundancy_sets):
             for file_set in range(self.settings.slices_per_disc):
@@ -492,19 +510,20 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
                 self.d._create(dir, bn, str(slice), 'dar', 'operating')
                 slice += 1
         # a couple of odd files
-        for slice in range(self.settings.data_discs // 2):
+        for a_slice in range(self.settings.data_discs // 2):
             self.touch_dar_files(bn, slice, slice)
             self.d._create(dir, bn, str(slice), 'dar', 'operating')
             slice += 1
+        max_slice = slice
         self.touch_dar_files(bn, slice, slice)
         self.d._create(dir, bn, str(slice), 'dar', 'last_slice')
-        print(discs_burned)
-        print(self.d._run.call_args_list)
         def calls_running(executable):
             return list(x for x in self.d._run.call_args_list 
                     if x[0][0] == executable)
         expected_pars_run = self.settings.slices_per_disc * \
-                complete_redundancy_sets
+                complete_redundancy_sets + \
+                (self.settings.slices_per_disc // 2) + \
+                1
         self.assertEqual(len(calls_running('par2')), expected_pars_run)
         expected_discs_burned = self.settings.total_set_count * 3
         self.assertEqual(len(calls_running('growisofs')), 
@@ -513,67 +532,103 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
         for redundancy_set in range(complete_redundancy_sets):
             for disc_in_set in range(self.settings.total_set_count):
                 b = discs_burned[disc]
-                self.assert_('README.txt' in b)
-                self.assert_('darbrrb.py' in b)
+                self.assertTrue('README.txt' in b)
+                self.assertTrue('darbrrb.py' in b)
                 dars_on_b = [x for x in b if x.endswith('.dar')]
-                par_vols_on_b = [x for x in b if '.vol' in x 
+                par_volumes_on_b = [x for x in b if '.vol' in x 
                                  and x.endswith('.par2')]
                 par_files_on_b = [x for x in b if '.vol' not in x
                                   and x.endswith('.par2')]
-                self.assertEqual(len(dars_on_b)+len(par_vols_on_b),
+                self.assertEqual(len(dars_on_b)+len(par_volumes_on_b),
                         self.settings.slices_per_disc)
                 self.assertEqual(len(par_files_on_b),
                         self.settings.slices_per_disc)
+                first_disc_in_set = disc - disc_in_set
+                first_slice_in_set = first_disc_in_set * \
+                        self.settings.data_discs
+                expected_par_files = [
+                        self.par_main_format.format(bn, x, 
+                                x+self.settings.data_discs-1)
+                        for x in range(first_slice_in_set + 1,
+                                max_slice+1+1,
+                                self.settings.data_discs)[
+                                        :self.settings.slices_per_disc]]
+                self.assertEqual(par_files_on_b, expected_par_files)
+                if disc_in_set < self.settings.data_discs:
+                    expected_dars = [self.dar_filename_format.format(bn, x)
+                            for x in range(first_slice_in_set + disc_in_set + 1,
+                                    max_slice+1+1,
+                                    self.settings.data_discs)[
+                                            :self.settings.slices_per_disc]]
+                    self.assertEqual(dars_on_b, expected_dars)
+                else:
+                    parity_disc_in_set = disc_in_set - self.settings.data_discs
+                    expected_par_volumes = [
+                            self.par_volume_format.format(bn, x, 
+                                    x+self.settings.data_discs-1, 0, 500)
+                            for x in range(first_slice_in_set + \
+                                            parity_disc_in_set + 1,
+                                    max_slice+1+1,
+                                    self.settings.data_discs)[
+                                            :self.settings.slices_per_disc]]
+                    self.assertEqual(par_volumes_on_b, expected_par_volumes)
                 disc += 1
-        # TODO: make assertions about last set
-
-        self.fail()
+        self.fail("no assertions made about last, uneven set of discs")
             
 
+# the decorators above have made it so that TestDarbrrbFourPlusOne is
+# decorated. when we derive from it here, our ThreePlusEight class is already
+# decorated; so we needn't (and mustn't) write the decorators again.
+class TestDarbrrbThreePlusEight(TestDarbrrbFourPlusOne):
+    data_discs = 3
+    parity_discs = 8
+    slices_per_disc = 13 
+    pretend_free_space = (data_discs + parity_discs) * 25000
 
-@patch.object(Darbrrb, 'scratch_mib_free', return_value=(30000*11))
-@patch.object(Darbrrb, '_run')
-@patch.object(Darbrrb, 'wait_for_empty_disc')
-class TestDarbrrbThreePlusEight(UsesTempScratchDir):
-    def setUp(self):
-        super().setUp()
-        self.settings.data_discs = 3
-        self.settings.parity_discs = 8
-        self.settings.burner_device = '/dev/zero'
-        self.d = Darbrrb(self.settings, __file__)
-
-    def testFirstDiscOfSet(self, wfed, _run, smf):
-        with working_directory(self.settings.scratch_dir):
-            self.touch('thing.0001.dar')
-            everything = list(os.walk(self.settings.scratch_dir))
-            self.d._create('dir', 'thing', '1', 'dar', 'operating')
-            everything2 = list(os.walk(self.settings.scratch_dir))
-            self.assertEqual(everything, everything2)
-
-    def testLastDiscOfSet(self, wfed, _run, smf):
-        self.d.ensure_scratch()
-        with working_directory(self.settings.scratch_dir):
-            self.touch( 'thing.0001.dar', 'thing.0002.dar', 'thing.0003.dar')
-            self.touch( 'thing.0001-0003.par2',
-                    'thing.0001-0003.vol000+100.par2',
-                    'thing.0001-0003.vol000+200.par2',
-                    'thing.0001-0003.vol000+300.par2',
-                    'thing.0001-0003.vol000+400.par2',
-                    'thing.0001-0003.vol000+500.par2',
-                    'thing.0001-0003.vol000+600.par2',
-                    'thing.0001-0003.vol000+700.par2',
-                    'thing.0001-0003.vol000+800.par2')
-            self.d._create('dir', 'thing', '3', 'dar', 'operating')
-            self.d._run.assert_any_call(
-                    'par2', 'c', '-n8', '-u', '-r266',
-                    'thing.0001-0003.par2',
-                    'thing.0001.dar', 'thing.0002.dar',
-                    'thing.0003.dar')
-            for disc in range(1, 8+1):
-                self.d._run.assert_any_call(
-                    'growisofs', '-Z', '/dev/zero',
-                    '-R', '-J', '__disc{:04d}'.format(disc))
-
+#
+#@patch.object(Darbrrb, 'scratch_mib_free', return_value=(30000*11))
+#@patch.object(Darbrrb, '_run')
+#@patch.object(Darbrrb, 'wait_for_empty_disc')
+#class TestDarbrrbThreePlusEight(UsesTempScratchDir):
+#    def setUp(self):
+#        super().setUp()
+#        self.settings.data_discs = 3
+#        self.settings.parity_discs = 8
+#        self.settings.burner_device = '/dev/zero'
+#        self.d = Darbrrb(self.settings, __file__)
+#
+#    def testFirstDiscOfSet(self, wfed, _run, smf):
+#        with working_directory(self.settings.scratch_dir):
+#            self.touch('thing.0001.dar')
+#            everything = list(os.walk(self.settings.scratch_dir))
+#            self.d._create('dir', 'thing', '1', 'dar', 'operating')
+#            everything2 = list(os.walk(self.settings.scratch_dir))
+#            self.assertEqual(everything, everything2)
+#
+#    def testLastDiscOfSet(self, wfed, _run, smf):
+#        self.d.ensure_scratch()
+#        with working_directory(self.settings.scratch_dir):
+#            self.touch( 'thing.0001.dar', 'thing.0002.dar', 'thing.0003.dar')
+#            self.touch( 'thing.0001-0003.par2',
+#                    'thing.0001-0003.vol000+100.par2',
+#                    'thing.0001-0003.vol000+200.par2',
+#                    'thing.0001-0003.vol000+300.par2',
+#                    'thing.0001-0003.vol000+400.par2',
+#                    'thing.0001-0003.vol000+500.par2',
+#                    'thing.0001-0003.vol000+600.par2',
+#                    'thing.0001-0003.vol000+700.par2',
+#                    'thing.0001-0003.vol000+800.par2')
+#            self.d._create('dir', 'thing', '3', 'dar', 'operating')
+#            self.d._run.assert_any_call(
+#                    'par2', 'c', '-n8', '-u', '-r266',
+#                    'thing.0001-0003.par2',
+#                    'thing.0001.dar', 'thing.0002.dar',
+#                    'thing.0003.dar')
+#            for disc in range(1, 8+1):
+#                self.d._run.assert_any_call(
+#                    'growisofs', '-Z', '/dev/zero',
+#                    '-R', '-J', '__disc{:04d}'.format(disc))
+#
 
 
 if __name__ == '__main__':
