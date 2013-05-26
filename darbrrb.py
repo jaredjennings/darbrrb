@@ -26,13 +26,13 @@ darrc_template = """
 --min-digits={settings.digits}
 --compression=bzip2
 --slice {settings.slice_size}M
-# make crypto block size larger to reduce likelihood of duplicate ciphertext
+# make crypto block size larger to reduce 
+# likelihood of duplicate ciphertext
 --crypto-block 131072
 --key aes:
 -v
-
 create:
-    -E "python3 {progname} _create %p %b %n %e %c"
+-E "python3 {progname} _create %p %b %n %e %c"
 """
 
 class Settings:
@@ -94,8 +94,6 @@ class Settings:
     def slice_size(self):
         return (self.disc_size - self.reserve_space) // self.slices_per_disc
 
-    # -v switch turns this on
-    verbose = False
     # -n switch turns this on
     dry_run = False
 
@@ -111,6 +109,7 @@ import subprocess
 import tempfile
 import contextlib
 import unittest
+import logging
 import io
 try:
     from unittest.mock import Mock, patch, sentinel, call
@@ -169,13 +168,11 @@ class Darbrrb:
     def __init__(self, settings, progname):
         self.settings = settings
         self.progname = progname
+        self.log = logging.getLogger('darbrrb')
 
     def _run(self, *args):
-        if self.settings.verbose:
-            print("command {0!r}".format(args))
-        if self.settings.dry_run:
-            pass
-        else:
+        self.log.info('running command {!r}'.format(args))
+        if not self.settings.dry_run:
             subprocess.check_call(args)
 
     @property
@@ -222,14 +219,12 @@ into your directory. Do some more stuff.
     def dar(self, *args):
         # Perhaps darrc files can be non-ascii, but we haven't got any
         # non-ascii arguments to give here, so we'll stay on the safe side.
+        indented_contents = self.darrc_contents.replace('\n', '\n        ')
         with open(os.path.join(self.settings.scratch_dir, 'darrc'),
                   'w', encoding='ascii') as darrc_file:
-            if self.settings.verbose:
-                print("""
-vvvvvvvv Contents of darrc file {name}:     vvvvvvvvvvv
-{contents}
-^^^^^^^^ End contents of darrc file {name}. ^^^^^^^^^^^
-""".format(name=darrc_file.name, contents=self.darrc_contents))
+            self.log.info("""Contents of {name} follow:
+{indented}
+""".format(name=darrc_file.name, indented=indented_contents))
             darrc_file.write(self.darrc_contents)
             darrc_file.flush()
             # causes of this working_directory:
@@ -298,13 +293,14 @@ vvvvvvvv Contents of darrc file {name}:     vvvvvvvvvvv
                     basename, dar_files_here, number)
             par_volumes = sorted(glob.glob('*.vol*.par2'))
             files_to_distribute = dar_files_here + par_volumes
-            for f, d in zip(files_to_distribute, self.disc_dirs()):
+            for d in self.disc_dirs():
                 shutil.copyfile(par2filename, os.path.join(d, par2filename))
-                shutil.move(f, d)
                 with io.open(os.path.join(d, 'README.txt'), 'wt') as readme:
                     readme.write(self.readme)
                 this_program = os.path.basename(self.progname)
                 shutil.copyfile(this_program, os.path.join(d, this_program))
+            for f, d in zip(files_to_distribute, self.disc_dirs()):
+                shutil.move(f, d)
             os.unlink(par2filename)
         dars_on_discs = len(glob.glob(
                 os.path.join(self.disc_dir(1), '*.dar')))
@@ -314,7 +310,7 @@ vvvvvvvv Contents of darrc file {name}:     vvvvvvvvvvv
         if size_if_we_dont_burn > self.settings.disc_size or \
                 happening == 'last_slice':
             for d in self.disc_dirs():
-                print("burning from {}".format(d))
+                self.log.info("burning from {}".format(d))
                 self.wait_for_empty_disc()
                 self._run('growisofs', '-Z', self.settings.burner_device,
                         '-R', '-J', d)
@@ -323,12 +319,23 @@ vvvvvvvv Contents of darrc file {name}:     vvvvvvvvvvv
 
 
 class UsesTempScratchDir(unittest.TestCase):
+    # par2 splits parity data into volumes. the number of volumes depends on
+    # the size of the input file(s). there are multiple volumes per par2
+    # recovery file, and the range of the volumes stored in the file is written
+    # in the file's name, e.g. mybackup.001-004.vol25+25.par2 means this par2
+    # recovery file has 25 volumes starting with volume 25.
+    #
+    # the terminology after this point in the code may not match the par2 man
+    # page terminology like this comment did.
+    parity_volumes = 500
+
     def setUp(self):
         self.settings = Settings()
         tempdir = tempfile.mkdtemp('darbrrb_test')
         self.old_tempfile_tempdir = tempfile.tempdir
         tempfile.tempdir = tempdir
         self.settings.scratch_dir = tempdir
+        self.log = logging.getLogger('test code')
     
     def tearDown(self):
         shutil.rmtree(self.settings.scratch_dir)
@@ -347,6 +354,7 @@ class UsesTempScratchDir(unittest.TestCase):
     def touch(self, *filenames):
         self.mkdirp_parents(*filenames)
         for name in filenames:
+            self.log.debug('touching {}'.format(name))
             with open(name, 'wt') as f:
                 print('*', file=f)
 
@@ -373,13 +381,15 @@ class UsesTempScratchDir(unittest.TestCase):
         return '{{}}.{0}-{0}.vol{1}+{1}.par2'.format(
                 self.settings.number_format, '{:03d}')
 
-    def touch_par_files(self, basename, min, max, count):
-        volumes_per_file = 500 // count
-        self.touch(self.par_main_format.format(basename, min, max))
+    def touch_par_files(self, basename, min_, max_, count):
+        volumes_per_file = self.parity_volumes // count
+        self.touch(self.par_main_format.format(basename, min_, max_))
         first_vol = 0
         for i in range(count):
-            self.touch(self.par_volume_format.format(basename, min, max,
-                    first_vol, volumes_per_file))
+            for first_vol in range(0, self.parity_volumes, volumes_per_file):
+                self.touch(self.par_volume_format.format(basename, min_, max_,
+                        first_vol, min(volumes_per_file, 
+                                self.parity_volumes - first_vol)))
 
 
 class TestWorkingDirectoryContextManager(unittest.TestCase):
@@ -395,7 +405,7 @@ class TestWorkingDirectoryContextManager(unittest.TestCase):
 @patch('os.chdir')
 @patch('os.getcwd', return_value='/zart')
 @patch.object(Darbrrb, '_run')
-class TestDarbrrbInvokeDar(UsesTempScratchDir):
+class TestInvokeDar(UsesTempScratchDir):
     def setUp(self):
         super().setUp()
         self.d = Darbrrb(self.settings, __file__)
@@ -474,8 +484,43 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
         self.d._run.assert_has_calls([
             call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0001'),
             call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0002'),
-            call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0003')])
-        self.assertEqual(self.d._run.call_count, 4)
+            call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0003'),
+            call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0004'),
+            call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0005'),
+            ])
+        self.assertEqual(self.d._run.call_count, 6)
+
+
+
+@patch.object(Darbrrb, '_run')
+@patch.object(Darbrrb, 'wait_for_empty_disc')
+class TestWholeBackup(UsesTempScratchDir):
+    data_discs = 4
+    parity_discs = 1
+    slices_per_disc = 5
+    pretend_free_space = (data_discs + parity_discs) * 25000
+
+    def setUp(self):
+        super().setUp()
+        self.log = logging.getLogger('test code')
+        self.settings.data_discs = self.data_discs
+        self.settings.parity_discs = self.parity_discs
+        self.settings.slices_per_disc = self.slices_per_disc
+        self.settings.burner_device = '/dev/zero'
+        # in our tests, _create is called, as though dar were invoking this
+        # script; when dar does that, it's with the scratch dir as the cwd,
+        # as tested above
+        with patch.object(Darbrrb, 'scratch_mib_free',
+                return_value=self.pretend_free_space):
+            self.d = Darbrrb(self.settings, __file__)
+            self.d.ensure_scratch()
+            self.cwd = os.getcwd()
+            os.chdir(self.settings.scratch_dir)
+
+    def tearDown(self):
+        super().tearDown()
+        os.chdir(self.cwd)
+
 
     def testWholeBackup(self, wfed, _run):
         dir = 'dir'
@@ -495,6 +540,8 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
                         sorted(glob.glob(os.path.join(dir, '*')))))
                 discs_burned.append(files_burned)
         _run.side_effect = crazy_run
+        # ------------------------------------------------------------------
+        # running the code under test
         slice = 1
         # two whole redundancy sets
         for redundancy_set in range(complete_redundancy_sets):
@@ -517,6 +564,8 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
         max_slice = slice
         self.touch_dar_files(bn, slice, slice)
         self.d._create(dir, bn, str(slice), 'dar', 'last_slice')
+        # ------------------------------------------------------------------
+        # assertions
         def calls_running(executable):
             return list(x for x in self.d._run.call_args_list 
                     if x[0][0] == executable)
@@ -529,9 +578,11 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
         self.assertEqual(len(calls_running('growisofs')), 
                 expected_discs_burned)
         disc = 0
-        for redundancy_set in range(complete_redundancy_sets):
+        # the last redundancy set will be incomplete
+        for redundancy_set in range(complete_redundancy_sets + 1):
             for disc_in_set in range(self.settings.total_set_count):
                 b = discs_burned[disc]
+                self.log.debug(' --- disc {} has files {}'.format(disc, b))
                 self.assertTrue('README.txt' in b)
                 self.assertTrue('darbrrb.py' in b)
                 dars_on_b = [x for x in b if x.endswith('.dar')]
@@ -539,47 +590,63 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
                                  and x.endswith('.par2')]
                 par_files_on_b = [x for x in b if '.vol' not in x
                                   and x.endswith('.par2')]
-                self.assertEqual(len(dars_on_b)+len(par_volumes_on_b),
-                        self.settings.slices_per_disc)
-                self.assertEqual(len(par_files_on_b),
-                        self.settings.slices_per_disc)
+                self.log.debug(' %d dars, %d par master files, %d par volumes',
+                        len(dars_on_b), len(par_files_on_b), 
+                        len(par_volumes_on_b))
+                if redundancy_set < complete_redundancy_sets:
+                    self.assertEqual(len(dars_on_b)+len(par_volumes_on_b),
+                            self.settings.slices_per_disc)
+                    self.assertEqual(len(par_files_on_b),
+                            self.settings.slices_per_disc)
                 first_disc_in_set = disc - disc_in_set
                 first_slice_in_set = first_disc_in_set * \
                         self.settings.data_discs
                 expected_par_files = [
                         self.par_main_format.format(bn, x, 
-                                x+self.settings.data_discs-1)
+                                min(x+self.settings.data_discs-1,max_slice))
                         for x in range(first_slice_in_set + 1,
                                 max_slice+1+1,
                                 self.settings.data_discs)[
                                         :self.settings.slices_per_disc]]
-                self.assertEqual(par_files_on_b, expected_par_files)
+                self.assertEqual(par_files_on_b, expected_par_files, "par file mismatch on disc {}".format(disc))
                 if disc_in_set < self.settings.data_discs:
                     expected_dars = [self.dar_filename_format.format(bn, x)
                             for x in range(first_slice_in_set + disc_in_set + 1,
-                                    max_slice+1+1,
+                                    max_slice+1,
                                     self.settings.data_discs)[
                                             :self.settings.slices_per_disc]]
                     self.assertEqual(dars_on_b, expected_dars)
                 else:
                     parity_disc_in_set = disc_in_set - self.settings.data_discs
+                    parvol_per_file = self.parity_volumes // self.parity_discs
+                    parity_volume_start = parvol_per_file * parity_disc_in_set
                     expected_par_volumes = [
                             self.par_volume_format.format(bn, x, 
-                                    x+self.settings.data_discs-1, 0, 500)
+                                    x+self.settings.data_discs-1,
+                                    parity_volume_start,
+                                    parity_volume_start + min(parvol_per_file,
+                                            self.parity_volumes - \
+                                                    parity_volume_start))
                             for x in range(first_slice_in_set + \
                                             parity_disc_in_set + 1,
                                     max_slice+1+1,
                                     self.settings.data_discs)[
                                             :self.settings.slices_per_disc]]
-                    self.assertEqual(par_volumes_on_b, expected_par_volumes)
+                    if redundancy_set < complete_redundancy_sets:
+                        self.assertEqual(par_volumes_on_b, expected_par_volumes)
+                    else:
+                        # we may have run out of dar slices and put some of the
+                        # redundancy files on previous, not-usually-parity
+                        # discs. this assertion is weak but it's a start.
+                        self.assertTrue(set(par_volumes_on_b).issubset(
+                                set(expected_par_volumes)))
                 disc += 1
-        self.fail("no assertions made about last, uneven set of discs")
             
 
-# the decorators above have made it so that TestDarbrrbFourPlusOne is
-# decorated. when we derive from it here, our ThreePlusEight class is already
-# decorated; so we needn't (and mustn't) write the decorators again.
-class TestDarbrrbThreePlusEight(TestDarbrrbFourPlusOne):
+# the decorators above have made it so that TestWholeBackup is decorated. when
+# we derive from it here, our ThreePlusEight class is already decorated; so we
+# needn't (and mustn't) write the decorators again.
+class TestWholeBackupThreePlusEight(TestWholeBackup):
     data_discs = 3
     parity_discs = 8
     slices_per_disc = 13 
@@ -637,19 +704,30 @@ if __name__ == '__main__':
         usage(s)
         sys.exit(1)
     opts, remaining = getopt.getopt(sys.argv[1:], 'hvnt', ['help'])
+    loglevel = logging.WARNING
+    testing = False
     for o, v in opts:
         if o == '-h' or o == '--help':
             usage(s)
             sys.exit(1)
         elif o == '-v':
-            s.verbose = True
+            loglevel = logging.INFO
         elif o == '-n':
             s.dry_run = True
         elif o == '-t':
-            sys.argv = [sys.argv[0]] + remaining
-            unittest.main()
+            loglevel = logging.DEBUG
+            testing = True
         else:
             raise Exception('unknown switch {}'.format(o))
+    # style only influences how format is interpreted, not also how values are
+    # interpolated into log messages. source: Python 3.2
+    # logging/__init__.py:317, LogRecord class, getMessage method.
+    logging.basicConfig(style='{', format='{name}: {message}',
+            level=loglevel, stream=sys.stderr)
+    logging.debug('a debug message')
+    if testing:
+        sys.argv = [sys.argv[0]] + remaining
+        sys.exit(unittest.main())
     d = Darbrrb(s, __file__)
     if remaining[0] == 'dar':
         d.ensure_scratch()
