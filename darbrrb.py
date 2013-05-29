@@ -111,6 +111,7 @@ import contextlib
 import unittest
 import logging
 import io
+import itertools
 try:
     from unittest.mock import Mock, patch, sentinel, call
 except ImportError:
@@ -292,16 +293,21 @@ into your directory. Do some more stuff.
             par2filename = self.make_redundancy_files(
                     basename, dar_files_here, number)
             par_volumes = sorted(glob.glob('*.vol*.par2'))
-            files_to_distribute = dar_files_here + par_volumes
             for d in self.disc_dirs():
                 shutil.copyfile(par2filename, os.path.join(d, par2filename))
                 with io.open(os.path.join(d, 'README.txt'), 'wt') as readme:
                     readme.write(self.readme)
                 this_program = os.path.basename(self.progname)
                 shutil.copyfile(this_program, os.path.join(d, this_program))
-            for f, d in zip(files_to_distribute, self.disc_dirs()):
+            data_dirs = itertools.cycle(self.disc_dir(i+1)
+                    for i in range(self.settings.data_discs))
+            redundancy_dirs = itertools.cycle(self.disc_dir(i+1)
+                    for i in range(self.settings.data_discs,
+                            self.settings.total_set_count))
+            for f, d in itertools.chain(
+                    zip(dar_files_here, data_dirs),
+                    zip(par_volumes, redundancy_dirs)):
                 shutil.move(f, d)
-            os.unlink(par2filename)
         dars_on_discs = len(glob.glob(
                 os.path.join(self.disc_dir(1), '*.dar')))
         size_if_we_dont_burn = (dars_on_discs + 1) * \
@@ -327,7 +333,7 @@ class UsesTempScratchDir(unittest.TestCase):
     #
     # the terminology after this point in the code may not match the par2 man
     # page terminology like this comment did.
-    parity_volumes = 500
+    parity_volumes = 600
 
     def setUp(self):
         self.settings = Settings()
@@ -336,6 +342,8 @@ class UsesTempScratchDir(unittest.TestCase):
         tempfile.tempdir = tempdir
         self.settings.scratch_dir = tempdir
         self.log = logging.getLogger('test code')
+        self.dars_created = []
+        self.par_volumes_created = []
     
     def tearDown(self):
         shutil.rmtree(self.settings.scratch_dir)
@@ -354,7 +362,6 @@ class UsesTempScratchDir(unittest.TestCase):
     def touch(self, *filenames):
         self.mkdirp_parents(*filenames)
         for name in filenames:
-            self.log.debug('touching {}'.format(name))
             with open(name, 'wt') as f:
                 print('*', file=f)
 
@@ -367,6 +374,11 @@ class UsesTempScratchDir(unittest.TestCase):
     @property
     def dar_filename_format(self):
         return '{{}}.{}.dar'.format(self.settings.number_format)
+
+    def touch_dar_file(self, basename, n):
+        filename = self.dar_filename_format.format(basename,n)
+        self.dars_created.append(filename)
+        self.touch(filename)
 
     def touch_dar_files(self, basename, min, max):
         self.touch(*(self.dar_filename_format.format(basename,n)
@@ -387,9 +399,11 @@ class UsesTempScratchDir(unittest.TestCase):
         first_vol = 0
         for i in range(count):
             for first_vol in range(0, self.parity_volumes, volumes_per_file):
-                self.touch(self.par_volume_format.format(basename, min_, max_,
+                pvn = self.par_volume_format.format(basename, min_, max_,
                         first_vol, min(volumes_per_file, 
-                                self.parity_volumes - first_vol)))
+                                self.parity_volumes - first_vol))
+                self.par_volumes_created.append(pvn)
+                self.touch(pvn)
 
 
 class TestWorkingDirectoryContextManager(unittest.TestCase):
@@ -516,73 +530,101 @@ class TestWholeBackup(UsesTempScratchDir):
             self.d.ensure_scratch()
             self.cwd = os.getcwd()
             os.chdir(self.settings.scratch_dir)
+        self.discs_burned = []
+        self.dar_create_slices_count = 0 # see test methods
 
     def tearDown(self):
         super().tearDown()
         os.chdir(self.cwd)
 
 
+    def mock_dar(self, *args):
+        # set self.dar_create_slices_count before you run this method
+        #
+        # we assume here that dar is being called to create the archive
+        # args goes like dar -c basename -R root_of_files_to_save
+        dir = args[-1]
+        basename = args[2]
+        for slice in range(self.dar_create_slices_count-1):
+            # slice is zero-based but dar is one-based
+            self.touch_dar_file(basename, slice+1)
+            self.d._create(dir, basename, str(slice+1), 'dar', 'operating')
+        slice += 1
+        self.touch_dar_file(basename, slice+1)
+        self.d._create(dir, basename, str(slice+1), 'dar', 'last_slice')
+
+    def mock_par2(self, *args):
+        # expected args: par2 c -n{} -u -r{} outfile infile infile...
+        # -n is the number of redundancy files to make; -r the percentage of
+        # redundancy; outfile is named {basename}.{slicemin}-{slicemax}.par2
+        outfile = args[5]
+        nswitch = args[2]
+        bn, numbers, par = outfile.split('.')
+        n1, n2 = map(int, numbers.split('-'))
+        count = int(nswitch.lstrip('-n'))
+        self.touch_par_files(bn, n1, n2, count)
+
+    def mock_growisofs(self, *args):
+        # expected args: growisofs .... dirname
+        files = list(map(os.path.basename,
+                sorted(glob.glob(os.path.join(args[-1], '*')))))
+        # self.log.debug('burning disc with files {}'.format(files))
+        self.discs_burned.append(files)
+
+    def mock__run(self, *args):
+        # self.log.debug('args are %r', args)
+        if args[0] == 'dar':
+            self.mock_dar(*args)
+        elif args[0] == 'par2':
+            self.mock_par2(*args)
+        elif args[0] == 'growisofs':
+            self.mock_growisofs(*args)
+        else:
+            raise Exception('unknown command run under test', args)
+
     def testWholeBackup(self, wfed, _run):
         dir = 'dir'
         bn = 'whole'
-        discs_burned = []
+        sett = self.settings
         complete_redundancy_sets = 2
-        def crazy_run(*args):
-            if args[0] == 'par2':
-                # this is loopy: it depends way too much on the code tested.
-                # but to assume less we would have to emulate more of par2
-                n1, n2 = map(int, args[5].split('.')[1].split('-'))
-                count = int(args[2].lstrip('-n'))
-                self.touch_par_files(bn, n1, n2, count)
-            elif args[0] == 'growisofs':
-                dir = args[-1]
-                files_burned = tuple(map(os.path.basename, 
-                        sorted(glob.glob(os.path.join(dir, '*')))))
-                discs_burned.append(files_burned)
-        _run.side_effect = crazy_run
-        # ------------------------------------------------------------------
-        # running the code under test
-        slice = 1
+        _run.side_effect = self.mock__run
         # two whole redundancy sets
-        for redundancy_set in range(complete_redundancy_sets):
-            for file_set in range(self.settings.slices_per_disc):
-                for slice_in_set in range(self.settings.data_discs):
-                    self.touch_dar_files(bn, slice, slice)
-                    self.d._create(dir, bn, str(slice), 'dar', 'operating')
-                    slice += 1
         # a couple of file sets, not enough to make a redundancy set
-        for file_set in range(self.settings.slices_per_disc // 2):
-            for slice_in_set in range(self.settings.data_discs):
-                self.touch_dar_files(bn, slice, slice)
-                self.d._create(dir, bn, str(slice), 'dar', 'operating')
-                slice += 1
         # a couple of odd files
-        for a_slice in range(self.settings.data_discs // 2):
-            self.touch_dar_files(bn, slice, slice)
-            self.d._create(dir, bn, str(slice), 'dar', 'operating')
-            slice += 1
-        max_slice = slice
-        self.touch_dar_files(bn, slice, slice)
-        self.d._create(dir, bn, str(slice), 'dar', 'last_slice')
-        # ------------------------------------------------------------------
-        # assertions
+        self.dar_create_slices_count = \
+                sett.slices_per_disc * sett.data_discs * \
+                        complete_redundancy_sets + \
+                sett.slices_per_disc * sett.data_discs // 2 + \
+                sett.data_discs // 2
+        # for each complete or partial (at end) set of {data_discs} dar files,
+        # we run par2 once
+        expected_pars_run = sett.slices_per_disc * \
+                        complete_redundancy_sets + \
+                sett.slices_per_disc // 2 + \
+                1
+        # --- run code
+        self.d.dar('-c', bn, '-R', '/fnord')
+        max_slice = self.dar_create_slices_count
+        # --- assertions
         def calls_running(executable):
             return list(x for x in self.d._run.call_args_list 
                     if x[0][0] == executable)
-        expected_pars_run = self.settings.slices_per_disc * \
-                complete_redundancy_sets + \
-                (self.settings.slices_per_disc // 2) + \
-                1
         self.assertEqual(len(calls_running('par2')), expected_pars_run)
-        expected_discs_burned = self.settings.total_set_count * 3
+        expected_discs_burned = sett.total_set_count * 3
         self.assertEqual(len(calls_running('growisofs')), 
                 expected_discs_burned)
-        disc = 0
+        unburned_dars = set(self.dars_created)
+        unburned_par_volumes = set(self.par_volumes_created)
+        for b in self.discs_burned:
+            unburned_dars -= set(b)
+            unburned_par_volumes -= set(b)
+        self.assertEqual(len(unburned_dars), 0)
+        return
         # the last redundancy set will be incomplete
+        disc = 0
         for redundancy_set in range(complete_redundancy_sets + 1):
-            for disc_in_set in range(self.settings.total_set_count):
+            for disc_in_set in range(sett.total_set_count):
                 b = discs_burned[disc]
-                self.log.debug(' --- disc {} has files {}'.format(disc, b))
                 self.assertTrue('README.txt' in b)
                 self.assertTrue('darbrrb.py' in b)
                 dars_on_b = [x for x in b if x.endswith('.dar')]
@@ -590,56 +632,10 @@ class TestWholeBackup(UsesTempScratchDir):
                                  and x.endswith('.par2')]
                 par_files_on_b = [x for x in b if '.vol' not in x
                                   and x.endswith('.par2')]
-                self.log.debug(' %d dars, %d par master files, %d par volumes',
-                        len(dars_on_b), len(par_files_on_b), 
-                        len(par_volumes_on_b))
-                if redundancy_set < complete_redundancy_sets:
-                    self.assertEqual(len(dars_on_b)+len(par_volumes_on_b),
-                            self.settings.slices_per_disc)
-                    self.assertEqual(len(par_files_on_b),
-                            self.settings.slices_per_disc)
-                first_disc_in_set = disc - disc_in_set
-                first_slice_in_set = first_disc_in_set * \
-                        self.settings.data_discs
-                expected_par_files = [
-                        self.par_main_format.format(bn, x, 
-                                min(x+self.settings.data_discs-1,max_slice))
-                        for x in range(first_slice_in_set + 1,
-                                max_slice+1+1,
-                                self.settings.data_discs)[
-                                        :self.settings.slices_per_disc]]
-                self.assertEqual(par_files_on_b, expected_par_files, "par file mismatch on disc {}".format(disc))
-                if disc_in_set < self.settings.data_discs:
-                    expected_dars = [self.dar_filename_format.format(bn, x)
-                            for x in range(first_slice_in_set + disc_in_set + 1,
-                                    max_slice+1,
-                                    self.settings.data_discs)[
-                                            :self.settings.slices_per_disc]]
-                    self.assertEqual(dars_on_b, expected_dars)
+                if disc_in_set < sett.data_discs:
+                    self.assertEqual(len(par_volumes_on_b), 0)
                 else:
-                    parity_disc_in_set = disc_in_set - self.settings.data_discs
-                    parvol_per_file = self.parity_volumes // self.parity_discs
-                    parity_volume_start = parvol_per_file * parity_disc_in_set
-                    expected_par_volumes = [
-                            self.par_volume_format.format(bn, x, 
-                                    x+self.settings.data_discs-1,
-                                    parity_volume_start,
-                                    parity_volume_start + min(parvol_per_file,
-                                            self.parity_volumes - \
-                                                    parity_volume_start))
-                            for x in range(first_slice_in_set + \
-                                            parity_disc_in_set + 1,
-                                    max_slice+1+1,
-                                    self.settings.data_discs)[
-                                            :self.settings.slices_per_disc]]
-                    if redundancy_set < complete_redundancy_sets:
-                        self.assertEqual(par_volumes_on_b, expected_par_volumes)
-                    else:
-                        # we may have run out of dar slices and put some of the
-                        # redundancy files on previous, not-usually-parity
-                        # discs. this assertion is weak but it's a start.
-                        self.assertTrue(set(par_volumes_on_b).issubset(
-                                set(expected_par_volumes)))
+                    self.assertEqual(len(dars_on_b), 0)
                 disc += 1
             
 
@@ -652,50 +648,13 @@ class TestWholeBackupThreePlusEight(TestWholeBackup):
     slices_per_disc = 13 
     pretend_free_space = (data_discs + parity_discs) * 25000
 
-#
-#@patch.object(Darbrrb, 'scratch_mib_free', return_value=(30000*11))
-#@patch.object(Darbrrb, '_run')
-#@patch.object(Darbrrb, 'wait_for_empty_disc')
-#class TestDarbrrbThreePlusEight(UsesTempScratchDir):
-#    def setUp(self):
-#        super().setUp()
-#        self.settings.data_discs = 3
-#        self.settings.parity_discs = 8
-#        self.settings.burner_device = '/dev/zero'
-#        self.d = Darbrrb(self.settings, __file__)
-#
-#    def testFirstDiscOfSet(self, wfed, _run, smf):
-#        with working_directory(self.settings.scratch_dir):
-#            self.touch('thing.0001.dar')
-#            everything = list(os.walk(self.settings.scratch_dir))
-#            self.d._create('dir', 'thing', '1', 'dar', 'operating')
-#            everything2 = list(os.walk(self.settings.scratch_dir))
-#            self.assertEqual(everything, everything2)
-#
-#    def testLastDiscOfSet(self, wfed, _run, smf):
-#        self.d.ensure_scratch()
-#        with working_directory(self.settings.scratch_dir):
-#            self.touch( 'thing.0001.dar', 'thing.0002.dar', 'thing.0003.dar')
-#            self.touch( 'thing.0001-0003.par2',
-#                    'thing.0001-0003.vol000+100.par2',
-#                    'thing.0001-0003.vol000+200.par2',
-#                    'thing.0001-0003.vol000+300.par2',
-#                    'thing.0001-0003.vol000+400.par2',
-#                    'thing.0001-0003.vol000+500.par2',
-#                    'thing.0001-0003.vol000+600.par2',
-#                    'thing.0001-0003.vol000+700.par2',
-#                    'thing.0001-0003.vol000+800.par2')
-#            self.d._create('dir', 'thing', '3', 'dar', 'operating')
-#            self.d._run.assert_any_call(
-#                    'par2', 'c', '-n8', '-u', '-r266',
-#                    'thing.0001-0003.par2',
-#                    'thing.0001.dar', 'thing.0002.dar',
-#                    'thing.0003.dar')
-#            for disc in range(1, 8+1):
-#                self.d._run.assert_any_call(
-#                    'growisofs', '-Z', '/dev/zero',
-#                    '-R', '-J', '__disc{:04d}'.format(disc))
-#
+# This is just to make sure all those integer divisions and multiplications
+# aren't just happening to be right.
+class TestWholeBackupNineteenPlusSeven(TestWholeBackup):
+    data_discs = 19
+    parity_discs = 7
+    slices_per_disc = 31
+    pretend_free_space = (data_discs + parity_discs) * 25000
 
 
 if __name__ == '__main__':
