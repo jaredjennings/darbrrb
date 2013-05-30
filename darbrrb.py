@@ -254,13 +254,12 @@ into your directory. Do some more stuff.
         # dar_slice_number will be 204 (17*6*2), etc.
         set_number = dar_slice_number // (self.settings.data_discs *
                 self.settings.slices_per_disc)
-        # these numbers are 0-based, but we want the ones in the title 1-based
-        ssn = str(set_number + 1)
-        snis = str(number_in_set + 1)
-        number_length = len(ssn) + len(snis) + 1 + 1 # dashes
+        number_length = 4 + 3 + 1 + 1 # dashes
         ISO9660_MAX_VOL_ID_LENGTH = 32
         max_bn_length = ISO9660_MAX_VOL_ID_LENGTH - number_length
-        return "{}-{}-{}".format(basename[:max_bn_length], ssn, snis)
+        # these numbers are 0-based, but we want the ones in the title 1-based
+        return "{}-{:04d}-{:03d}".format(basename[:max_bn_length],
+                set_number + 1, number_in_set + 1)
 
     def scratch_mib_free(self):
         s = os.statvfs(self.settings.scratch_dir)
@@ -515,15 +514,15 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
                 'thing.0013.dar', 'thing.0014.dar')
         self.d._run.assert_has_calls([
             call('growisofs', '-Z', '/dev/zero', '-R', '-J',
-                    '-V', 'thing-1-1', '__disc0001'),
+                    '-V', 'thing-0001-001', '__disc0001'),
             call('growisofs', '-Z', '/dev/zero', '-R', '-J',
-                    '-V', 'thing-1-2', '__disc0002'),
+                    '-V', 'thing-0001-002', '__disc0002'),
             call('growisofs', '-Z', '/dev/zero', '-R', '-J',
-                    '-V', 'thing-1-3', '__disc0003'),
+                    '-V', 'thing-0001-003', '__disc0003'),
             call('growisofs', '-Z', '/dev/zero', '-R', '-J',
-                    '-V', 'thing-1-4', '__disc0004'),
+                    '-V', 'thing-0001-004', '__disc0004'),
             call('growisofs', '-Z', '/dev/zero', '-R', '-J',
-                    '-V', 'thing-1-5', '__disc0005'),
+                    '-V', 'thing-0001-005', '__disc0005'),
             ])
         self.assertEqual(self.d._run.call_count, 6)
 
