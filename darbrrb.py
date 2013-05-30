@@ -245,6 +245,23 @@ into your directory. Do some more stuff.
     def disc_dirs(self):
         return sorted(glob.glob('__disc*'))
 
+    def disc_title(self, basename, dar_slice_number, number_in_set):
+        # if we are burning discs, thus asking for disc titles, the slice
+        # number dar gives us will be the number of the last slice that would
+        # fit on the last disc. e.g.  if slices_per_disc is 17, data_discs is
+        # 6, and parity_discs is 5, for the first set when we burn
+        # dar_slice_number will be 102 (17*6*1); for the second set
+        # dar_slice_number will be 204 (17*6*2), etc.
+        set_number = dar_slice_number // (self.settings.data_discs *
+                self.settings.slices_per_disc)
+        # these numbers are 0-based, but we want the ones in the title 1-based
+        ssn = str(set_number + 1)
+        snis = str(number_in_set + 1)
+        number_length = len(ssn) + len(snis) + 1 + 1 # dashes
+        ISO9660_MAX_VOL_ID_LENGTH = 32
+        max_bn_length = ISO9660_MAX_VOL_ID_LENGTH - number_length
+        return "{}-{}-{}".format(basename[:max_bn_length], ssn, snis)
+
     def scratch_mib_free(self):
         s = os.statvfs(self.settings.scratch_dir)
         return s.f_bavail * s.f_frsize // 1048576
@@ -315,11 +332,12 @@ into your directory. Do some more stuff.
                 self.settings.reserve_space
         if size_if_we_dont_burn > self.settings.disc_size or \
                 happening == 'last_slice':
-            for d in self.disc_dirs():
+            for i, d in enumerate(self.disc_dirs()):
                 self.log.info("burning from {}".format(d))
                 self.wait_for_empty_disc()
                 self._run('growisofs', '-Z', self.settings.burner_device,
-                        '-R', '-J', d)
+                        '-R', '-J', '-V', self.disc_title(basename, number, i),
+                        d)
                 for fn in glob.glob(os.path.join(d, '*')):
                     os.unlink(fn)
 
@@ -496,11 +514,16 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
                 'thing.0013-0014.par2',
                 'thing.0013.dar', 'thing.0014.dar')
         self.d._run.assert_has_calls([
-            call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0001'),
-            call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0002'),
-            call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0003'),
-            call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0004'),
-            call('growisofs', '-Z', '/dev/zero', '-R', '-J', '__disc0005'),
+            call('growisofs', '-Z', '/dev/zero', '-R', '-J',
+                    '-V', 'thing-1-1', '__disc0001'),
+            call('growisofs', '-Z', '/dev/zero', '-R', '-J',
+                    '-V', 'thing-1-2', '__disc0002'),
+            call('growisofs', '-Z', '/dev/zero', '-R', '-J',
+                    '-V', 'thing-1-3', '__disc0003'),
+            call('growisofs', '-Z', '/dev/zero', '-R', '-J',
+                    '-V', 'thing-1-4', '__disc0004'),
+            call('growisofs', '-Z', '/dev/zero', '-R', '-J',
+                    '-V', 'thing-1-5', '__disc0005'),
             ])
         self.assertEqual(self.d._run.call_count, 6)
 
