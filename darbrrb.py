@@ -32,7 +32,7 @@ darrc_template = """
 --key aes:
 -v
 create:
--E "python3 {progname} _create %p %b %n %e %c"
+-E "python3 {progname} {progargs} _create %p %b %n %e %c"
 """
 
 class Settings:
@@ -43,7 +43,7 @@ class Settings:
 # SCRATCH_DIR must have (DATA_DISCS + PARITY_DISCS) * DISC_SIZE mebibytes free
 # to run backup. SCRATCH_DIR must not exist when this script is run.
 # SCRATCH_DIR must not be a subdirectory of the directory being backed up.
-    scratch_dir = "scratch"
+    scratch_dir = '/home/tmp/backup_scratch'
 
 # The number of digits to use when numbering archive slices. If you might have
 # more slices than 10 to the power of DIGITS, you need to make DIGITS bigger
@@ -52,21 +52,23 @@ class Settings:
 
 # Each redundancy set is composed of (DATA_DISCS + PARITY_DISCS) discs.
 # These are like hard disk shelves with RAID, but with discs instead.
-    data_discs = 4
-    parity_discs = 1
+    data_discs = 3
+    parity_discs = 2
 
 # How many slices should be on each disc? A slice can be truncated by I/O
 # errors caused by media decay, so one is too few; but more than 100 may be
 # wasteful.
-    slices_per_disc = 40
+    slices_per_disc = 10
 
 # How much space is on a disc?
     # BluRay
-    disc_size = 23841   # MiB
+    ## disc_size = 23841   # MiB
     # DVD
     ## disc_size = 4482    # MiB
     # CD-R
-    ## disc_size = 700     # MiB
+    ## disc_size = 680     # MiB
+    disc_size = 30 # MiB
+
 
 # ^^^^^^^^    Above are variables for you to mess with    ^^^^^^^^^^^
 
@@ -77,6 +79,10 @@ class Settings:
     reserve_space = 10   # MiB
 
     # calculated settings
+
+    @property
+    def slices_per_set(self):
+        return self.data_discs * self.slices_per_disc
 
     @property
     def total_set_count(self):
@@ -94,8 +100,8 @@ class Settings:
     def slice_size(self):
         return (self.disc_size - self.reserve_space) // self.slices_per_disc
 
-    # -n switch turns this on
-    dry_run = False
+    # -n switch turns this off
+    actually_burn = True
 
 
 
@@ -112,6 +118,8 @@ import unittest
 import logging
 import io
 import itertools
+import random
+import math
 try:
     from unittest.mock import Mock, patch, sentinel, call
 except ImportError:
@@ -141,8 +149,8 @@ ones that tell dar which mode to operate in, and which files to archive.
 Otherwise this script will not form a complete record of how dar was run.
 
 The -v switch, before dar, means to be verbose and show the dar command being
-executed and the darrc used. The -n switch, before dar, means dry run or
-no-act: don't actually execute anything.
+executed and the darrc used. The -n switch, before dar, means don't burn any
+discs: just make directories containing the files that would have been burned.
 
 """.format(s=settings, progname=sys.argv[0]),
         file=sys.stderr)
@@ -166,20 +174,28 @@ class ScratchAlreadyExists(Exception):
 # This is a class not because it needs state, but because I didn't want to pass
 # settings around all the time
 class Darbrrb:
-    def __init__(self, settings, progname):
+    def __init__(self, settings, progname, progopts=()):
         self.settings = settings
         self.progname = progname
+        self.progopts = progopts
         self.log = logging.getLogger('darbrrb')
 
     def _run(self, *args):
         self.log.info('running command {!r}'.format(args))
-        if not self.settings.dry_run:
-            subprocess.check_call(args)
+        subprocess.check_call(args)
 
     @property
     def darrc_contents(self):
+        progargs = []
+        for o, v in self.progopts:
+            if v:
+                progargs.extend(o, v)
+            else:
+                progargs.append(o)
         return darrc_template.format(settings=self.settings,
-                progname=self.progname)
+                progname=os.path.join(self.settings.scratch_dir, 
+                        os.path.basename(self.progname)),
+                progargs=' '.join(progargs))
 
     @property
     def readme(self):
@@ -236,8 +252,11 @@ into your directory. Do some more stuff.
                 self._run('dar', *(args + ('-B', darrc_file.name)))
 
     def wait_for_empty_disc(self):
-        # stub
-        input("press enter when you have inserted an empty disc:")
+        # There are a hundred cooler ways to do this; in 2013, I don't know of
+        # one that works on many distros and OSes, much less ten years from
+        # now. But you'll probably still be able to press enter, some way.
+        if self.settings.actually_burn:
+            input("press enter when you have inserted an empty disc:")
 
     def disc_dir(self, disc):
         return '__disc{:04d}'.format(disc)
@@ -245,20 +264,12 @@ into your directory. Do some more stuff.
     def disc_dirs(self):
         return sorted(glob.glob('__disc*'))
 
-    def disc_title(self, basename, dar_slice_number, number_in_set):
-        # if we are burning discs, thus asking for disc titles, the slice
-        # number dar gives us will be the number of the last slice that would
-        # fit on the last disc. e.g.  if slices_per_disc is 17, data_discs is
-        # 6, and parity_discs is 5, for the first set when we burn
-        # dar_slice_number will be 102 (17*6*1); for the second set
-        # dar_slice_number will be 204 (17*6*2), etc.
-        set_number = dar_slice_number // (self.settings.data_discs *
-                self.settings.slices_per_disc)
-        number_length = 4 + 3 + 1 + 1 # dashes
-        ISO9660_MAX_VOL_ID_LENGTH = 32
-        max_bn_length = ISO9660_MAX_VOL_ID_LENGTH - number_length
-        # these numbers are 0-based, but we want the ones in the title 1-based
-        return "{}-{:04d}-{:03d}".format(basename[:max_bn_length],
+    def disc_title(self, basename, dar_slice_number, number_in_set, happening):
+        set_number = math.floor((dar_slice_number - 1) /
+                self.settings.slices_per_set)
+        # Max ISO 9660 vol id length is 32. Leave room for numbers and 2 dashes.
+        # +1: These numbers are 0-based, but we want the ones in the title 1-based.
+        return "{}-{:04d}-{:03d}".format(basename[:(32-4-3-2)],
                 set_number + 1, number_in_set + 1)
 
     def scratch_mib_free(self):
@@ -291,13 +302,30 @@ into your directory. Do some more stuff.
         min_number = max_number - nslices + 1
         par2format = "{{}}.{0}-{0}.par2".format(self.settings.number_format)
         par2filename = par2format.format(basename, min_number, max_number)
-        redundancy_percent = 100 * self.settings.parity_discs // nslices
+        # par2 will barf if we give it a percent greater than 100
+        redundancy_percent = min(100 * self.settings.parity_discs // nslices,
+                100)
         self._run(*(['par2', 'c',
                 '-n{}'.format(self.settings.parity_discs),
                 '-u', '-r{}'.format(redundancy_percent),
                 par2filename,
                 ] + dar_files))
         return par2filename
+
+    def burn(self, basename, number, i, d, happening):
+        if self.settings.actually_burn:
+            self._run('growisofs', '-Z', self.settings.burner_device,
+                    '-R', '-J', '-V', self.disc_title(basename, number, i,
+                            happening),
+                    d)
+        else:
+            destination = os.path.join(self.settings.scratch_dir,
+                    self.disc_title(basename, number, i))
+            self.log.info('not actually burning: moving files from {} to ' \
+                    '{}'.format(d, destination))
+            os.mkdir(destination)
+            for f in glob.glob(os.path.join(d, '*')):
+                shutil.move(f, os.path.join(destination, os.path.basename(f)))
 
     def _create(self, dir, basename, number, extension, happening):
         number = int(number)
@@ -334,9 +362,7 @@ into your directory. Do some more stuff.
             for i, d in enumerate(self.disc_dirs()):
                 self.log.info("burning from {}".format(d))
                 self.wait_for_empty_disc()
-                self._run('growisofs', '-Z', self.settings.burner_device,
-                        '-R', '-J', '-V', self.disc_title(basename, number, i),
-                        d)
+                self.burn(basename, number, i, d, happening)
                 for fn in glob.glob(os.path.join(d, '*')):
                     os.unlink(fn)
 
@@ -526,6 +552,71 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
             ])
         self.assertEqual(self.d._run.call_count, 6)
 
+class TestDiscTitle(unittest.TestCase):
+    def setUp(self):
+        self.settings = Settings()
+        self.settings.digits = 4
+        self.d = Darbrrb(self.settings, __file__)
+        self.log = logging.getLogger(self.__class__.__name__)
+
+    def testQuickCheck(self):
+        passes = 0
+        fails = 0
+        tries = 100
+        for qc in range(tries):
+            self.settings.data_discs = random.randint(1,40)
+            self.settings.parity_discs = random.randint(1,40)
+            self.settings.slices_per_disc = random.randint(1,100)
+            sps = self.settings.slices_per_set
+            complete_sets = random.randint(1,10)
+            slices_in_last_set = random.randint(1,self.settings.slices_per_disc)
+            calls = []
+            # sets are numbered starting with 1
+            for set in range(1,complete_sets+1):
+                calls.append((set, (set * sps), 'operating'))
+            calls.append((set+1, ((set * sps) + 
+                                  random.randint(1, sps)),
+                            'last_slice'))
+            for set, slice, happening in calls:
+                for disc in range(self.settings.total_set_count):
+                    should_name = 'fnord-%04d-%03d' % (set, disc+1)
+                    is_name = self.d.disc_title('fnord', slice, disc,
+                            happening)
+                    self.assertEqual(is_name, should_name,
+                            'with {s.data_discs} data discs, ' \
+                            '{s.slices_per_disc} slices per disc, ' \
+                            '{cs} complete sets, {sils} slices in last set, ' \
+                            'on set {set}, slice {slice}, ' \
+                            'happening {happening}, calls was {calls}, ' \
+                            'disc title should be ' \
+                            '{should_name}, but is {is_name}'.format(
+                                s=self.settings,
+                                cs=complete_sets, sils=slices_in_last_set,
+                                set=set, slice=slice, happening=happening,
+                                calls=calls,
+                                should_name=should_name, is_name=is_name))
+
+    def testFourPlusOne(self):
+        self.settings.data_discs = 4
+        self.settings.parity_discs = 1
+        self.settings.slices_per_disc = 11
+        for set, slice, happening in (
+                (1, 44, 'operating'),
+                (2, 88, 'operating'),
+                (3, 100, 'last_slice')):
+            for disc in range(self.settings.total_set_count):
+                should_name = 'fnord-%04d-%03d' % (set, disc + 1)
+                is_name = self.d.disc_title('fnord', slice, disc, happening)
+
+    def testThreePlusEight(self):
+        self.settings.data_discs = 3
+        self.settings.parity_discs = 8
+        self.settings.slices_per_disc = 20
+        for set, slice, happening in ((1, 60, 'operating'), (2, 98, 'last_slice')):
+            for disc in range(self.settings.total_set_count):
+                should_name = 'fnord-%04d-%03d' % (set, disc + 1)
+                is_name = self.d.disc_title('fnord', slice, disc, happening)
+                self.assertEqual(is_name, should_name)
 
 
 @patch.object(Darbrrb, '_run')
@@ -628,6 +719,9 @@ class TestWholeBackup(UsesTempScratchDir):
         self.d.dar('-c', bn, '-R', '/fnord')
         max_slice = self.dar_create_slices_count
         # --- assertions
+        #self.log.debug('calls:')
+        #for c in self.d._run.call_args_list:
+        #    self.log.debug('%r', c)
         def calls_running(executable):
             return list(x for x in self.d._run.call_args_list 
                     if x[0][0] == executable)
@@ -692,9 +786,9 @@ if __name__ == '__main__':
             usage(s)
             sys.exit(1)
         elif o == '-v':
-            loglevel = logging.INFO
+            loglevel -= 10
         elif o == '-n':
-            s.dry_run = True
+            s.actually_burn = False
         elif o == '-t':
             loglevel = logging.DEBUG
             testing = True
@@ -705,15 +799,14 @@ if __name__ == '__main__':
     # logging/__init__.py:317, LogRecord class, getMessage method.
     logging.basicConfig(style='{', format='{name}: {message}',
             level=loglevel, stream=sys.stderr)
-    logging.debug('a debug message')
     if testing:
         sys.argv = [sys.argv[0]] + remaining
         sys.exit(unittest.main())
-    d = Darbrrb(s, __file__)
+    d = Darbrrb(s, __file__, opts)
     if remaining[0] == 'dar':
         d.ensure_scratch()
-        d.dar(remaining[1:])
+        d.dar(*remaining[1:])
     elif remaining[0] == '_create':
-        d.create(remaining[1:])
+        d._create(*remaining[1:])
 
 
