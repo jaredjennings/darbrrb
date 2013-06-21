@@ -264,7 +264,7 @@ into your directory. Do some more stuff.
     def disc_dirs(self):
         return sorted(glob.glob('__disc*'))
 
-    def disc_title(self, basename, dar_slice_number, number_in_set, happening):
+    def disc_title(self, basename, dar_slice_number, number_in_set):
         set_number = math.floor((dar_slice_number - 1) /
                 self.settings.slices_per_set)
         # Max ISO 9660 vol id length is 32. Leave room for numbers and 2 dashes.
@@ -299,6 +299,8 @@ into your directory. Do some more stuff.
 
     def make_redundancy_files(self, basename, dar_files, max_number):
         nslices = len(dar_files)
+        if nslices == 0:
+            raise ValueError('no dar slices for par2 to operate on')
         min_number = max_number - nslices + 1
         par2format = "{{}}.{0}-{0}.par2".format(self.settings.number_format)
         par2filename = par2format.format(basename, min_number, max_number)
@@ -315,8 +317,7 @@ into your directory. Do some more stuff.
     def burn(self, basename, number, i, d, happening):
         if self.settings.actually_burn:
             self._run('growisofs', '-Z', self.settings.burner_device,
-                    '-R', '-J', '-V', self.disc_title(basename, number, i,
-                            happening),
+                    '-R', '-J', '-V', self.disc_title(basename, number, i),
                     d)
         else:
             destination = os.path.join(self.settings.scratch_dir,
@@ -580,8 +581,7 @@ class TestDiscTitle(unittest.TestCase):
             for set, slice, happening in calls:
                 for disc in range(self.settings.total_set_count):
                     should_name = 'fnord-%04d-%03d' % (set, disc+1)
-                    is_name = self.d.disc_title('fnord', slice, disc,
-                            happening)
+                    is_name = self.d.disc_title('fnord', slice, disc)
                     self.assertEqual(is_name, should_name,
                             'with {s.data_discs} data discs, ' \
                             '{s.slices_per_disc} slices per disc, ' \
@@ -606,7 +606,7 @@ class TestDiscTitle(unittest.TestCase):
                 (3, 100, 'last_slice')):
             for disc in range(self.settings.total_set_count):
                 should_name = 'fnord-%04d-%03d' % (set, disc + 1)
-                is_name = self.d.disc_title('fnord', slice, disc, happening)
+                is_name = self.d.disc_title('fnord', slice, disc)
 
     def testThreePlusEight(self):
         self.settings.data_discs = 3
@@ -615,7 +615,7 @@ class TestDiscTitle(unittest.TestCase):
         for set, slice, happening in ((1, 60, 'operating'), (2, 98, 'last_slice')):
             for disc in range(self.settings.total_set_count):
                 should_name = 'fnord-%04d-%03d' % (set, disc + 1)
-                is_name = self.d.disc_title('fnord', slice, disc, happening)
+                is_name = self.d.disc_title('fnord', slice, disc)
                 self.assertEqual(is_name, should_name)
 
 
