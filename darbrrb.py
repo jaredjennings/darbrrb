@@ -130,15 +130,19 @@ except ImportError:
 
 def usage(settings):
     print(""" 
-This script makes compressed, encrypted backups with {s.slice_size} MiB slices
-striped across sets of {s.total_set_count} {s.disc_size} MiB optical discs,
-each set containing {s.data_discs} data disc(s) and {s.parity_discs} parity
-disc(s). It requires the following software (or later versions): Python 3.2;
-dar 2.4.8; par2cmdline 0.4; growisofs 7.1; genisoimage 1.1.11.
+This script makes compressed, encrypted backups with {s.slice_size} MiB \
+slices striped
+across sets of {s.total_set_count} {s.disc_size} MiB optical discs, \
+each set containing {s.data_discs} data disc(s)
+and {s.parity_discs} parity disc(s). It \
+requires the following software (or later versions):
+Python 3.2; mock 1.0 (included in Python 3.3); dar 2.4.8; par2cmdline 0.4;
+growisofs 7.1; genisoimage 1.1.11.
 
-When backing up, the directory {s.scratch_dir!r} should have {s.scratch_free_needed} MiB of space free.
-When restoring, copy this script off of the optical disc first; you'll need to
-switch optical discs during the backup.
+When backing up, the directory {s.scratch_dir!r} should have 
+{s.scratch_free_needed} MiB of space free. \
+When restoring, copy this script off of the optical
+disc first; you'll need to switch optical discs during the backup.
 
 Usage: python3 {progname} [-v] [-n] dar <dar parameters>
 
@@ -146,13 +150,15 @@ Dar parameters of note:
     Creating archive:   -c <archive basename> -R <dir with files to backup>
     Extracting archive: -x <archive basename>
 
-See dar(1) about parameters you can give to dar. Don't get fancy: only use the
-ones that tell dar which mode to operate in, and which files to archive.
-Otherwise this script will not form a complete record of how dar was run.
+See dar(1) about parameters you can give to dar. Don't get fancy: only use
+the ones that tell dar which mode to operate in, and which files to
+archive.  Otherwise this script will not form a complete record of how dar
+was run.
 
-The -v switch, before dar, means to be verbose and show the dar command being
-executed and the darrc used. The -n switch, before dar, means don't burn any
-discs: just make directories containing the files that would have been burned.
+The -v switch, before dar, means to be verbose and show the dar command
+being executed and the darrc used. The -n switch, before dar, means don't
+burn any discs: just make directories containing the files that would have
+been burned.
 
 """.format(s=settings, progname=sys.argv[0]),
         file=sys.stderr)
