@@ -29,6 +29,8 @@ darrc_template = """
 # make crypto block size larger to reduce 
 # likelihood of duplicate ciphertext
 --crypto-block 131072
+# DO NOT specify the AES key here: this script is burned on every
+# backup disc, in the clear
 --key aes:
 -v
 create:
