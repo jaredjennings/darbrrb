@@ -8,10 +8,11 @@ it can be restored ten years later.
 Setting
 -------
 
-I've got a few hundred gigabytes of data and a fireproof box. My data
-is on an LVM logical volume, so I can make a snapshot to ensure it
-won't change during backup. This is my data I'm backing up, not my
-system, so I don't need bare-metal restore.
+I've got a few hundred gigabytes of data and a fireproof box. The
+directions say not to put a hard drive in the box and expect it to
+work after a fire. My data is on an LVM logical volume, so I can make
+a snapshot to ensure it won't change during backup. This is my data
+I'm backing up, not my system, so I don't need bare-metal restore.
 
 Problems
 --------
@@ -55,3 +56,12 @@ the following ways:
 4. darbrrb uses [dar](http://dar.linux.free.fr) and
    [par](http://en.wikipedia.org/wiki/Parchive) 2 because they seem
    likely to be fetchable and usable in ten years.
+
+What is it?
+-----------
+
+darbrrb is a single script, written in Python 3, which wraps dar and
+par2. dar provides a hook, where a program can be run every time dar
+finishes a slice; darbrrb hooks into this to make the redundancy data
+at the proper times, and burn discs using growisofs.
+
