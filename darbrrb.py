@@ -99,8 +99,34 @@ class Settings:
         return '{:0' + str(self.digits) + '}'
 
     @property
-    def slice_size(self):
+    def _slice_size_not_counting_par_overhead(self):
         return (self.disc_size - self.reserve_space) // self.slices_per_disc
+
+    @property
+    def slice_size(self):
+        # Account for the overhead that par introduces when creating
+        # redundancy data for a dar slice. This overhead is par file
+        # headers, checksums and the like.
+        #
+        # This formula was determined by making a lot of par files
+        # from sets of files containing random data. The sets were of
+        # sizes range(1,34) + [55], and file sizes were 1MB, 4MB, 16MB
+        # and 64MB. Overhead was calculated using parpackets.py, and
+        # a curve fit to the data using R's nls function::
+        #
+        #   nls(y ~ a*exp(b*x)+c, start=list(a=233087,b=-.05,c=3))
+        #
+        # It was a bit surprising to find (using a 3d scatter plot,
+        # just before this curve fitting was done) that overhead did
+        # not appear to vary across input file sizes: only with the
+        # number of files.
+        par_overhead_bytes = 270519 + \
+                         230648 * \
+                             math.exp(-0.195 * self.slices_per_disc)
+        # The rounding error we introduce here makes darbrrb a bad
+        # idea for media smaller than CDs.
+        par_overhead_mb = math.ceil(par_overhead_bytes / 1048576)
+        return self._slice_size_not_counting_par_overhead - par_overhead_mb
 
     # -n switch turns this off
     actually_burn = True
