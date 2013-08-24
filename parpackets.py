@@ -38,6 +38,7 @@ def headers_in_par2_file(f):
 
 if __name__ == '__main__':
     stats = []
+    stats.append(('nfiles', 'nbytes', 'data', 'overhead', 'recovery_length', 'nifsc', 'nmain', 'nrecvslic'))
     for fn in sys.argv[1:]:
         overhead = 0
         data = 0
@@ -45,10 +46,13 @@ if __name__ == '__main__':
         filesizes = []
         filesizes = {}
         with open(fn, 'rb') as f:
+            recovery_length = 0
             for type, length in headers_in_par2_file(f):
                 types[type] += 1
                 if 'RecvSlic' in type:
-                    data += length - 8 - 8 - 16 - 16 - 16
+                    payload = length - 8 - 8 - 16 - 16 - 16
+                    data += payload
+                    recovery_length = payload
                     overhead += 8+8+16+16+16
                 else:
                     overhead += length
@@ -63,7 +67,7 @@ if __name__ == '__main__':
             total = data + overhead
             overhead_pct = overhead / total * 100
             stats.append((len(filesizes), sum(filesizes.values()),
-                          data, overhead))
+                          data, overhead, recovery_length, types['PAR 2.0·IFSC····'], types['PAR 2.0·Main····'], types['PAR 2.0·RecvSlic']))
             print('{}: {} bytes of data, {} of overhead ({:5.3f}%), {} total'.format(
                 fn, data, overhead, overhead/(data+overhead)*100, data+overhead))
     print(types)
