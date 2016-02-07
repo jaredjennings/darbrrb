@@ -145,6 +145,7 @@ import contextlib
 import unittest
 import logging
 import io
+import re
 import itertools
 import random
 import math
@@ -162,7 +163,7 @@ across sets of {s.total_set_count} {s.disc_size} MiB optical discs, \
 each set containing {s.data_discs} data disc(s)
 and {s.parity_discs} parity disc(s). It \
 requires the following software (or later versions):
-Python 3.2; mock 1.0 (included in Python 3.3); dar 2.4.8; par2cmdline 0.4;
+Python 3.2; mock 1.0 (included in Python 3.3); dar 2.4.8; parchive 1.1;
 growisofs 7.1; genisoimage 1.1.11.
 
 When backing up, the directory {s.scratch_dir!r} should have 
@@ -236,7 +237,7 @@ class Darbrrb:
         return """
 
 This disc is part of a backup made by darbrrb, a tool that wraps the dar disk
-archiver and the par2 file verification and repair tool to produce backups
+archiver and the parchive file verification and repair tool to produce backups
 with redundancy, for greater resilience against data loss due to backup media
 failures or losses.
 
@@ -250,7 +251,7 @@ darbrrb ran dar with this darrc:
 
 The backup is split into redundancy sets of {s.total_set_count} discs. Out of
 each set, dar archive slices are striped across the {s.data_discs} data
-disc(s); par2 files with parity data for the dar slices are striped across the
+disc(s); par files with parity data for the dar slices are striped across the
 {s.parity_discs} disc(s). Each disc can store {s.disc_size} MiB of data, and
 each slice is {s.slice_size} MiB in size.
 
@@ -334,19 +335,15 @@ into your directory. Do some more stuff.
     def make_redundancy_files(self, basename, dar_files, max_number):
         nslices = len(dar_files)
         if nslices == 0:
-            raise ValueError('no dar slices for par2 to operate on')
+            raise ValueError('no dar slices for parchive to operate on')
         min_number = max_number - nslices + 1
-        par2format = "{{}}.{0}-{0}.par2".format(self.settings.number_format)
-        par2filename = par2format.format(basename, min_number, max_number)
-        # par2 will barf if we give it a percent greater than 100
-        redundancy_percent = min(100 * self.settings.parity_discs // nslices,
-                100)
-        self._run(*(['par2', 'c',
-                '-n{}'.format(self.settings.parity_discs),
-                '-u', '-r{}'.format(redundancy_percent),
-                par2filename,
+        parformat = "{{}}.{0}-{0}.par".format(self.settings.number_format)
+        parfilename = parformat.format(basename, min_number, max_number)
+        self._run(*(['parchive',
+                     '-n{}'.format(self.settings.parity_discs),
+                     'a', parfilename,
                 ] + dar_files))
-        return par2filename
+        return parfilename
 
     def burn(self, basename, number, i, d, happening):
         if self.settings.actually_burn:
@@ -369,11 +366,12 @@ into your directory. Do some more stuff.
         dar_files_here = sorted(glob.glob('*.dar'))
         if len(dar_files_here) >= self.settings.data_discs or \
                 happening == 'last_slice':
-            par2filename = self.make_redundancy_files(
+            parfilename = self.make_redundancy_files(
                     basename, dar_files_here, number)
-            par_volumes = sorted(glob.glob('*.vol*.par2'))
+            par_volumes = [f for f in os.listdir()
+                           if re.match(r'\.[pqr][0-9][0-9]$', f)]
             for d in self.disc_dirs():
-                shutil.copyfile(par2filename, os.path.join(d, par2filename))
+                shutil.copyfile(parfilename, os.path.join(d, parfilename))
                 with io.open(os.path.join(d, 'README.txt'), 'wt') as readme:
                     readme.write(self.readme)
                 this_program = os.path.basename(self.progname)
@@ -403,16 +401,6 @@ into your directory. Do some more stuff.
 
 
 class UsesTempScratchDir(unittest.TestCase):
-    # par2 splits parity data into volumes. the number of volumes depends on
-    # the size of the input file(s). there are multiple volumes per par2
-    # recovery file, and the range of the volumes stored in the file is written
-    # in the file's name, e.g. mybackup.001-004.vol25+25.par2 means this par2
-    # recovery file has 25 volumes starting with volume 25.
-    #
-    # the terminology after this point in the code may not match the par2 man
-    # page terminology like this comment did.
-    parity_volumes = 600
-
     def setUp(self):
         self.settings = Settings()
         tempdir = tempfile.mkdtemp('darbrrb_test')
@@ -421,7 +409,7 @@ class UsesTempScratchDir(unittest.TestCase):
         self.settings.scratch_dir = tempdir
         self.log = logging.getLogger('test code')
         self.dars_created = []
-        self.par_volumes_created = []
+        self.par_pxx_files_created = []
     
     def tearDown(self):
         shutil.rmtree(self.settings.scratch_dir)
@@ -464,24 +452,23 @@ class UsesTempScratchDir(unittest.TestCase):
 
     @property
     def par_main_format(self):
-        return '{{}}.{0}-{0}.par2'.format(self.settings.number_format)
+        return '{{}}.{0}-{0}.par'.format(self.settings.number_format)
 
     @property
     def par_volume_format(self):
-        return '{{}}.{0}-{0}.vol{1}+{1}.par2'.format(
-                self.settings.number_format, '{:03d}')
+        return '{{}}.{0}-{0}.{{}}{{:02d}}'.format(self.settings.number_format)
 
     def touch_par_files(self, basename, min_, max_, count):
-        volumes_per_file = self.parity_volumes // count
         self.touch(self.par_main_format.format(basename, min_, max_))
-        first_vol = 0
+        possible_volume_letters = 'pqrstuvxwyz'
         for i in range(count):
-            for first_vol in range(0, self.parity_volumes, volumes_per_file):
-                pvn = self.par_volume_format.format(basename, min_, max_,
-                        first_vol, min(volumes_per_file, 
-                                self.parity_volumes - first_vol))
-                self.par_volumes_created.append(pvn)
-                self.touch(pvn)
+            # name.p00, name.p01, ..., name.p99, name.q00, ...
+            letter = possible_volume_letters[i // 100]
+            number = i % 100
+            pfn = self.par_volume_format.format(basename, min_, max_,
+                                                letter, number)
+            self.par_pxx_files_created.append(pfn)
+            self.touch(pfn)
 
 
 class TestWorkingDirectoryContextManager(unittest.TestCase):
@@ -556,8 +543,8 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
         self.touch_par_files('thing', 1,4,1)
         self.d._create('dir', 'thing', '4', 'dar', 'operating')
         self.d._run.assert_any_call(
-                'par2', 'c', '-n1', '-u', '-r25',
-                'thing.0001-0004.par2',
+                'parchive', '-n1', 'a',
+                'thing.0001-0004.par',
                 'thing.0001.dar', 'thing.0002.dar',
                 'thing.0003.dar', 'thing.0004.dar')
         self.assertEqual(self.d._run.call_count, 1)
@@ -570,8 +557,8 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
         self.touch_par_files('thing', 13, 14, 1)
         self.d._create('dir', 'thing', '14', 'dar', 'last_slice')
         self.d._run.assert_any_call(
-                'par2', 'c', '-n1', '-u', '-r50',
-                'thing.0013-0014.par2',
+                'parchive', '-n1', 'a',
+                'thing.0013-0014.par',
                 'thing.0013.dar', 'thing.0014.dar')
         self.d._run.assert_has_calls([
             call('growisofs', '-Z', '/dev/zero', '-R', '-J',
@@ -700,12 +687,12 @@ class TestWholeBackup(UsesTempScratchDir):
         self.touch_dar_file(basename, slice+1)
         self.d._create(dir, basename, str(slice+1), 'dar', 'last_slice')
 
-    def mock_par2(self, *args):
-        # expected args: par2 c -n{} -u -r{} outfile infile infile...
-        # -n is the number of redundancy files to make; -r the percentage of
-        # redundancy; outfile is named {basename}.{slicemin}-{slicemax}.par2
-        outfile = args[5]
-        nswitch = args[2]
+    def mock_parchive(self, *args):
+        # expected args: parchive -n{} c outfile infile infile...
+        # -n is the number of redundancy files to make
+        # outfile is named {basename}.{slicemin}-{slicemax}.par
+        outfile = args[3]
+        nswitch = args[1]
         bn, numbers, par = outfile.split('.')
         n1, n2 = map(int, numbers.split('-'))
         count = int(nswitch.lstrip('-n'))
@@ -722,8 +709,8 @@ class TestWholeBackup(UsesTempScratchDir):
         # self.log.debug('args are %r', args)
         if args[0] == 'dar':
             self.mock_dar(*args)
-        elif args[0] == 'par2':
-            self.mock_par2(*args)
+        elif args[0] == 'parchive':
+            self.mock_parchive(*args)
         elif args[0] == 'growisofs':
             self.mock_growisofs(*args)
         else:
@@ -759,12 +746,13 @@ class TestWholeBackup(UsesTempScratchDir):
         def calls_running(executable):
             return list(x for x in self.d._run.call_args_list 
                     if x[0][0] == executable)
-        self.assertEqual(len(calls_running('par2')), expected_pars_run)
-        expected_discs_burned = sett.total_set_count * 3
+        self.assertEqual(len(calls_running('parchive')), expected_pars_run)
+        expected_discs_burned = sett.total_set_count * (
+            complete_redundancy_sets + 1)
         self.assertEqual(len(calls_running('growisofs')), 
                 expected_discs_burned)
         unburned_dars = set(self.dars_created)
-        unburned_par_volumes = set(self.par_volumes_created)
+        unburned_par_volumes = set(self.par_pxx_files_created)
         for b in self.discs_burned:
             unburned_dars -= set(b)
             unburned_par_volumes -= set(b)
