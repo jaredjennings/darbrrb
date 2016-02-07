@@ -654,6 +654,10 @@ class TestWholeBackup(UsesTempScratchDir):
         self.settings.data_discs = self.data_discs
         self.settings.parity_discs = self.parity_discs
         self.settings.slices_per_disc = self.slices_per_disc
+        # if disc_size is too low, the math doesn't work right and the
+        # tests fail. i wonder if this makes the system under test
+        # fail in the same way...
+        self.settings.disc_size = 23841
         self.settings.burner_device = '/dev/zero'
         # in our tests, _create is called, as though dar were invoking this
         # script; when dar does that, it's with the scratch dir as the cwd,
