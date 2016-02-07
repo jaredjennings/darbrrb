@@ -49,7 +49,7 @@ class Settings:
 
 # This ballpark figure is used to calculate the number of digits to
 # use when numbering archive slices.
-    expected_data_size = 50.0  # GiB
+    expected_data_size = 500.0  # GiB
 
 # Each redundancy set is composed of (DATA_DISCS + PARITY_DISCS) discs.
 # These are like hard disk shelves with RAID, but with discs instead.
@@ -63,12 +63,11 @@ class Settings:
 
 # How much space is on a disc?
     # BluRay
-    ## disc_size = 23841   # MiB
+    disc_size = 23841   # MiB
     # DVD
     ## disc_size = 4482    # MiB
     # CD-R
     ## disc_size = 680     # MiB
-    disc_size = 30 # MiB
 
 
 # ^^^^^^^^    Above are variables for you to mess with    ^^^^^^^^^^^
