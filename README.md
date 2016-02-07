@@ -54,14 +54,14 @@ the following ways:
    configurable number of spare discs.
 
 4. darbrrb uses [dar](http://dar.linux.free.fr) and
-   [par](http://en.wikipedia.org/wiki/Parchive) 2 because they seem
+   [par](http://en.wikipedia.org/wiki/Parchive) 1 because they seem
    likely to be fetchable and usable in ten years.
 
 What is it?
 -----------
 
 darbrrb is a single script, written in Python 3, which wraps dar and
-par2. dar provides a hook, where a program can be run every time dar
+parchive. dar provides a hook, where a program can be run every time dar
 finishes a slice; darbrrb hooks into this to make the redundancy data
 at the proper times, and burn discs using growisofs.
 
