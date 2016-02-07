@@ -47,10 +47,9 @@ class Settings:
 # SCRATCH_DIR must not be a subdirectory of the directory being backed up.
     scratch_dir = '/home/tmp/backup_scratch'
 
-# The number of digits to use when numbering archive slices. If you might have
-# more slices than 10 to the power of DIGITS, you need to make DIGITS bigger
-# accordingly.
-    digits = 4
+# This ballpark figure is used to calculate the number of digits to
+# use when numbering archive slices.
+    expected_data_size = 50.0  # GiB
 
 # Each redundancy set is composed of (DATA_DISCS + PARITY_DISCS) discs.
 # These are like hard disk shelves with RAID, but with discs instead.
@@ -93,6 +92,25 @@ class Settings:
     @property
     def scratch_free_needed(self):
         return self.total_set_count * self.disc_size
+
+    def _calculate_digits(self):
+        expected_frac_slices = (self.expected_data_size * 1024.0 *
+                                self.slices_per_disc) / self.disc_size
+        # a half a slice means another slice
+        expected_slices = int(expected_frac_slices + 1)
+        # i bet this is faster than a logarithm. and we haven't
+        # imported math yet
+        return len(str(expected_slices)) + 1
+    def _set_digits(self, new_value):
+        self._digits = new_value
+    def _get_digits(self):
+        if not hasattr(self, '_digits'):
+            self._digits = self._calculate_digits()
+        return self._digits
+    # make digits settable so the unit tests can just set it without
+    # worrying about what the right value of expected_data_size is for
+    # their fantastic scenarios
+    digits = property(_get_digits, _set_digits)
 
     @property
     def number_format(self):
@@ -399,6 +417,14 @@ into your directory. Do some more stuff.
                 for fn in glob.glob(os.path.join(d, '*')):
                     os.unlink(fn)
 
+class TestDigits(unittest.TestCase):
+    def test1(self):
+        self.settings = Settings()
+        self.settings.expected_data_size = 540.0
+        self.settings.slices_per_disc = 500
+        self.settings.disc_size = 23841
+        # around 12,000 total slices
+        self.assertEqual(self.settings.digits, 6)
 
 class UsesTempScratchDir(unittest.TestCase):
     def setUp(self):
@@ -516,6 +542,7 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
         self.settings.data_discs = self.data_discs
         self.settings.parity_discs = self.parity_discs
         self.settings.slices_per_disc = self.slices_per_disc
+        self.settings.digits = 4
         self.settings.burner_device = '/dev/zero'
         # in our tests, _create is called, as though dar were invoking this
         # script; when dar does that, it's with the scratch dir as the cwd,
