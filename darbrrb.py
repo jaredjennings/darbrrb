@@ -57,10 +57,10 @@ class Settings:
     data_discs = 3
     parity_discs = 2
 
-# How many slices should be on each disc? A slice can be truncated by I/O
-# errors caused by media decay, so one is too few; but more than 100 may be
-# wasteful.
-    slices_per_disc = 10
+# How many slices should be on each disc? I/O errors caused by media
+# decay can truncate a slice; PAR1 then can't use the whole file. So
+# let's be slightly wasteful.
+    slices_per_disc = 500
 
 # How much space is on a disc?
     # BluRay
