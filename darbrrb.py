@@ -761,7 +761,7 @@ class TestWholeBackup(UsesTempScratchDir):
                 sett.slices_per_disc * sett.data_discs // 2 + \
                 sett.data_discs // 2
         # for each complete or partial (at end) set of {data_discs} dar files,
-        # we run par2 once
+        # we run parchive once
         expected_pars_run = sett.slices_per_disc * \
                         complete_redundancy_sets + \
                 sett.slices_per_disc // 2 + \
@@ -795,10 +795,13 @@ class TestWholeBackup(UsesTempScratchDir):
                 self.assertTrue('README.txt' in b)
                 self.assertTrue('darbrrb.py' in b)
                 dars_on_b = [x for x in b if x.endswith('.dar')]
-                par_volumes_on_b = [x for x in b if '.vol' in x 
-                                 and x.endswith('.par2')]
-                par_files_on_b = [x for x in b if '.vol' not in x
-                                  and x.endswith('.par2')]
+                # the code uses regexes; let's use a different way
+                # here in the test for thoroughness
+                par_volumes_on_b = [x for x in b
+                                    if x[-4] == '.' and x[-3] in 'pqr'
+                                       and x[-2] in '0123456789'
+                                       and x[-1] in '0123456789']
+                par_files_on_b = [x for x in b if x.endswith('.par')]
                 if disc_in_set < sett.data_discs:
                     self.assertEqual(len(par_volumes_on_b), 0)
                     self.assertEqual(len(par_files_on_b), sett.slices_per_disc)
