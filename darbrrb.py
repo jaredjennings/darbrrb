@@ -386,7 +386,7 @@ into your directory. Do some more stuff.
             parfilename = self.make_redundancy_files(
                     basename, dar_files_here, number)
             par_volumes = [f for f in os.listdir()
-                           if re.match(r'\.[pqr][0-9][0-9]$', f)]
+                           if re.match(r'.*\.[pqr][0-9][0-9]$', f)]
             for d in self.disc_dirs():
                 shutil.copyfile(parfilename, os.path.join(d, parfilename))
                 with io.open(os.path.join(d, 'README.txt'), 'wt') as readme:
@@ -804,12 +804,21 @@ class TestWholeBackup(UsesTempScratchDir):
                 par_files_on_b = [x for x in b if x.endswith('.par')]
                 if disc_in_set < sett.data_discs:
                     self.assertEqual(len(par_volumes_on_b), 0)
-                    self.assertEqual(len(par_files_on_b), sett.slices_per_disc)
-                    self.assertEqual(len(dars_on_b), sett.slices_per_disc)
+                    self.assertGreater(len(dars_on_b), 0)
+                    self.assertGreater(len(par_files_on_b), 0)
                 else:
                     self.assertEqual(len(dars_on_b), 0)
-                    self.assertEqual(len(par_files_on_b), sett.slices_per_disc)
-                    self.assertEqual(len(par_volumes_on_b), sett.slices_per_disc)
+                    self.assertGreater(len(par_volumes_on_b), 0)
+                    self.assertGreater(len(par_files_on_b), 0)
+                if redundancy_set < complete_redundancy_sets:
+                    # not the last set; should have not only some
+                    # files, but a full complement of them
+                    if disc_in_set < sett.data_discs:
+                        self.assertEqual(len(par_files_on_b), sett.slices_per_disc)
+                        self.assertEqual(len(dars_on_b), sett.slices_per_disc)
+                    else:
+                        self.assertEqual(len(par_files_on_b), sett.slices_per_disc)
+                        self.assertEqual(len(par_volumes_on_b), sett.slices_per_disc)
                 disc += 1
             
 
