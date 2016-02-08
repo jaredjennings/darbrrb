@@ -787,12 +787,11 @@ class TestWholeBackup(UsesTempScratchDir):
             unburned_dars -= set(b)
             unburned_par_volumes -= set(b)
         self.assertEqual(len(unburned_dars), 0)
-        return
         # the last redundancy set will be incomplete
         disc = 0
         for redundancy_set in range(complete_redundancy_sets + 1):
             for disc_in_set in range(sett.total_set_count):
-                b = discs_burned[disc]
+                b = self.discs_burned[disc]
                 self.assertTrue('README.txt' in b)
                 self.assertTrue('darbrrb.py' in b)
                 dars_on_b = [x for x in b if x.endswith('.dar')]
@@ -802,8 +801,12 @@ class TestWholeBackup(UsesTempScratchDir):
                                   and x.endswith('.par2')]
                 if disc_in_set < sett.data_discs:
                     self.assertEqual(len(par_volumes_on_b), 0)
+                    self.assertEqual(len(par_files_on_b), sett.slices_per_disc)
+                    self.assertEqual(len(dars_on_b), sett.slices_per_disc)
                 else:
                     self.assertEqual(len(dars_on_b), 0)
+                    self.assertEqual(len(par_files_on_b), sett.slices_per_disc)
+                    self.assertEqual(len(par_volumes_on_b), sett.slices_per_disc)
                 disc += 1
             
 
