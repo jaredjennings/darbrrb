@@ -24,7 +24,6 @@
 
 darrc_template = """
 --min-digits={settings.digits}
---compression=bzip2
 --slice {settings.slice_size_KiB:0.0f}K
 # make crypto block size larger to reduce 
 # likelihood of duplicate ciphertext
@@ -34,7 +33,17 @@ darrc_template = """
 --key aes:
 -v
 create:
+--compression=bzip2
 -E "python3 {progname} {progargs} _create %p %b %n %e %c"
+extract:
+-O
+-E "python3 {progname} {progargs} _extract %p %b %n %e %c"
+list:
+-E "python3 {progname} {progargs} _list %p %b %n %e %c"
+test:
+-E "python3 {progname} {progargs} _test %p %b %n %e %c"
+isolate:
+-E "python3 {progname} {progargs} _isolate %p %b %n %e %c"
 """
 
 class Settings:
@@ -295,8 +304,8 @@ into your directory. Do some more stuff.
             darrc_file.flush()
             # causes of this working_directory:
             # 1. when dar makes files, it will make them in the scratch_dir
-            # 2. when dar calls this script, the _create method below will have
-            #    scratch_dir as its cwd.
+            # 2. when dar calls this script, the _create and other methods
+            #    below will have scratch_dir as their cwd.
             with working_directory(self.settings.scratch_dir):
                 self._run('dar', *(args + ('-B', darrc_file.name)))
 
@@ -307,20 +316,60 @@ into your directory. Do some more stuff.
         if self.settings.actually_burn:
             input("press enter when you have inserted an empty disc:")
 
+    def written_disc_directory(self, disc_title):
+        # Same as above. Now it's 2016, and all the ways I knew in
+        # 2013 don't work any more, there are new ways. But you could
+        # say "insert disc 2" in 1986, and you can say it today. And
+        # get off my lawn!
+        if self.settings.actually_burn:
+            dir = input("insert and mount disc entitled {} and type the "
+                        "directory where its files can be found: ".format(
+                            disc_title))
+            return dir
+        else:
+            return os.path.join(self.settings.scratch_dir, disc_title)
+
+    def last_set_directory(self, basename, disc_number_in_set):
+        if self.settings.actually_burn:
+            dir = input("insert and mount disc {} from the last set of "
+                        "backup {!r} and type the directory where its "
+                        "files can be found: ".format(disc_number_in_set,
+                                                      basename))
+            return dir
+        else:
+            dirs = glob.glob(os.path.join(self.settings.scratch_dir,
+                                          basename + '-*'))
+            last_disc_dir = sorted(dirs)[-1]
+            disc_in_last_set_dir = '{}{:03d}'.format(last_disc_dir[:-3],
+                                                     disc_number_in_set)
+            return disc_in_last_set_dir
+
     def disc_dir(self, disc):
         return '__disc{:04d}'.format(disc)
 
     def disc_dirs(self):
         return sorted(glob.glob('__disc*'))
 
-    def disc_title(self, basename, dar_slice_number, number_in_set):
-        set_number = math.floor((dar_slice_number - 1) /
-                self.settings.slices_per_set)
+    def disc_title(self, basename, set_number, disc_in_set_number):
         # Max ISO 9660 vol id length is 32. Leave room for numbers and 2 dashes.
         # +1: These numbers are 0-based, but we want the ones in the title 1-based.
+        # If you change the format here, change code above in last_set_directory!
         return "{}-{:04d}-{:03d}".format(basename[:(32-4-3-2)],
-                set_number + 1, number_in_set + 1)
+                                         set_number + 1,
+                                         disc_in_set_number + 1)
+        
+    def disc_title_for_slice(self, basename, dar_slice_number):
+        set_number = math.floor((dar_slice_number - 1) /
+                self.settings.slices_per_set)
+        disc_in_set_number = ((dar_slice_number - 1) %
+                              self.settings.data_discs)
+        return self.disc_title(basename, set_number, disc_in_set_number)
 
+    def disc_title_for_slice_and_disc(self, basename, dar_slice_number, disc_in_set_number):
+        set_number = math.floor((dar_slice_number - 1) /
+                self.settings.slices_per_set)
+        return self.disc_title(basename, set_number, disc_in_set_number)
+        
     def scratch_free_MiB(self):
         s = os.statvfs(self.settings.scratch_dir)
         return s.f_bavail * s.f_frsize // 1048576
@@ -360,18 +409,21 @@ into your directory. Do some more stuff.
                 ] + dar_files))
         return parfilename
 
-    def burn(self, basename, number, i, d, happening):
+    def burn(self, basename, slice_number, disc_in_set_number, dir, happening):
         if self.settings.actually_burn:
             self._run('growisofs', '-Z', self.settings.burner_device,
-                    '-R', '-J', '-V', self.disc_title(basename, number, i),
-                    d)
+                      '-R', '-J', '-V',
+                      self.disc_title_for_slice_and_disc(basename, slice_number,
+                                                         disc_in_set_number),
+                      dir)
         else:
             destination = os.path.join(self.settings.scratch_dir,
-                    self.disc_title(basename, number, i))
+                    self.disc_title_for_slice_and_disc(basename, slice_number,
+                                                       disc_in_set_number))
             self.log.info('not actually burning: moving files from {} to ' \
-                    '{}'.format(d, destination))
+                    '{}'.format(dir, destination))
             os.mkdir(destination)
-            for f in glob.glob(os.path.join(d, '*')):
+            for f in glob.glob(os.path.join(dir, '*')):
                 shutil.move(f, os.path.join(destination, os.path.basename(f)))
 
     def _create(self, dir, basename, number, extension, happening):
@@ -413,6 +465,39 @@ into your directory. Do some more stuff.
                 self.burn(basename, number, i, d, happening)
                 for fn in glob.glob(os.path.join(d, '*')):
                     os.unlink(fn)
+
+    def _obtain_recovery_set_files(self, basename, set_number, last=False):
+        pars = []
+        for disc in range(self.settings.total_set_count):
+            if last:
+                disc_dir = self.last_set_directory(basename, disc + 1)
+            else:
+                disc_title = self.disc_title(basename, set_number + 1, disc + 1)
+                disc_dir = self.written_disc_directory(disc_title)
+                print('expecting things from', disc_dir)
+            for f in os.listdir(disc_dir):
+                if f.endswith('.par'):
+                    pars.append(f)
+                # these have to be copies not symlinks because one of
+                # the *.dar files may be corrupt and parchive may try
+                # to overwrite it; if so, it must succeed
+                shutil.copyfile(os.path.join(disc_dir, f),
+                                os.path.join(self.settings.scratch_dir, f))
+        for parfilename in pars:
+            self._run('parchive', 'r', parfilename)
+            
+
+    def _extract(self, dir, basename, number, extension, happening):
+        number = int(number)
+        if number == 0:
+            # dar wants the last slice but doesn't know its number
+            self._obtain_recovery_set_files(basename, 0, last=True)
+        else:
+            set_number = math.floor((number - 1) /
+                                    self.settings.slices_per_set)
+            self._obtain_recovery_set_files(basename, set_number)
+
+        
 
 class TestDigits(unittest.TestCase):
     def test1(self):
@@ -626,7 +711,7 @@ class TestDiscTitle(unittest.TestCase):
             for set, slice, happening in calls:
                 for disc in range(self.settings.total_set_count):
                     should_name = 'fnord-%04d-%03d' % (set, disc+1)
-                    is_name = self.d.disc_title('fnord', slice, disc)
+                    is_name = self.d.disc_title_for_slice_and_disc('fnord', slice, disc)
                     self.assertEqual(is_name, should_name,
                             'with {s.data_discs} data discs, ' \
                             '{s.slices_per_disc} slices per disc, ' \
@@ -651,7 +736,7 @@ class TestDiscTitle(unittest.TestCase):
                 (3, 100, 'last_slice')):
             for disc in range(self.settings.total_set_count):
                 should_name = 'fnord-%04d-%03d' % (set, disc + 1)
-                is_name = self.d.disc_title('fnord', slice, disc)
+                is_name = self.d.disc_title_for_slice_and_disc('fnord', slice, disc)
 
     def testThreePlusEight(self):
         self.settings.data_discs = 3
@@ -660,7 +745,7 @@ class TestDiscTitle(unittest.TestCase):
         for set, slice, happening in ((1, 60, 'operating'), (2, 98, 'last_slice')):
             for disc in range(self.settings.total_set_count):
                 should_name = 'fnord-%04d-%03d' % (set, disc + 1)
-                is_name = self.d.disc_title('fnord', slice, disc)
+                is_name = self.d.disc_title_for_slice_and_disc('fnord', slice, disc)
                 self.assertEqual(is_name, should_name)
 
 
@@ -880,5 +965,7 @@ if __name__ == '__main__':
         d.dar(*remaining[1:])
     elif remaining[0] == '_create':
         d._create(*remaining[1:])
+    elif remaining[0] == '_extract':
+        d._extract(*remaining[1:])
 
 
