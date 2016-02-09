@@ -25,7 +25,7 @@
 darrc_template = """
 --min-digits={settings.digits}
 --compression=bzip2
---slice {settings.slice_size}M
+--slice {settings.slice_size_KiB:0.0f}K
 # make crypto block size larger to reduce 
 # likelihood of duplicate ciphertext
 --crypto-block 131072
@@ -49,7 +49,7 @@ class Settings:
 
 # This ballpark figure is used to calculate the number of digits to
 # use when numbering archive slices.
-    expected_data_size = 500.0  # GiB
+    expected_data_size_GiB = 500.0
 
 # Each redundancy set is composed of (DATA_DISCS + PARITY_DISCS) discs.
 # These are like hard disk shelves with RAID, but with discs instead.
@@ -63,11 +63,11 @@ class Settings:
 
 # How much space is on a disc?
     # BluRay
-    disc_size = 23841   # MiB
+    disc_size_MiB = 23841
     # DVD
-    ## disc_size = 4482    # MiB
+    ## disc_size_MiB = 4482
     # CD-R
-    ## disc_size = 680     # MiB
+    ## disc_size_MiB = 680
 
 
 # ^^^^^^^^    Above are variables for you to mess with    ^^^^^^^^^^^
@@ -76,7 +76,7 @@ class Settings:
     # README, and the par file that lists redundancy files.
     # Starting from http://stackoverflow.com/questions/468117, observed ISO +
     # Rock Ridge + Joliet filesystem overhead at 362K + 1.7K per filename.
-    reserve_space = 10   # MiB
+    reserve_space_KiB = 10240
 
     # calculated settings
 
@@ -89,16 +89,13 @@ class Settings:
         return self.data_discs + self.parity_discs
 
     @property
-    def scratch_free_needed(self):
-        return self.total_set_count * self.disc_size
+    def scratch_free_needed_MiB(self):
+        return self.total_set_count * self.disc_size_MiB
 
     def _calculate_digits(self):
-        expected_frac_slices = (self.expected_data_size * 1024.0 *
-                                self.slices_per_disc) / self.disc_size
-        # a half a slice means another slice
+        expected_frac_slices = (self.expected_data_size_GiB * 1024.0 *
+                                self.slices_per_disc) / self.disc_size_MiB
         expected_slices = int(expected_frac_slices + 1)
-        # i bet this is faster than a logarithm. and we haven't
-        # imported math yet
         return len(str(expected_slices)) + 1
     def _set_digits(self, new_value):
         self._digits = new_value
@@ -116,34 +113,34 @@ class Settings:
         return '{:0' + str(self.digits) + '}'
 
     @property
-    def _slice_size_not_counting_par_overhead(self):
-        return (self.disc_size - self.reserve_space) // self.slices_per_disc
+    def _slice_size_not_counting_par_overhead_KiB(self):
+        return ((self.disc_size_KiB - self.reserve_space_KiB) //
+                self.slices_per_disc)
 
     @property
-    def slice_size(self):
-        # Account for the overhead that par introduces when creating
-        # redundancy data for a dar slice. This overhead is par file
-        # headers, checksums and the like.
-        #
-        # This formula was determined by making a lot of par files
-        # from sets of files containing random data. The sets were of
-        # sizes range(1,34) + [55], and file sizes were 1MB, 4MB, 16MB
-        # and 64MB. Overhead was calculated using parpackets.py, and
-        # a curve fit to the data using R's nls function::
-        #
-        #   nls(y ~ a*exp(b*x)+c, start=list(a=233087,b=-.05,c=3))
-        #
-        # It was a bit surprising to find (using a 3d scatter plot,
-        # just before this curve fitting was done) that overhead did
-        # not appear to vary across input file sizes: only with the
-        # number of files.
-        par_overhead_bytes = 270519 + \
-                         230648 * \
-                             math.exp(-0.195 * self.slices_per_disc)
-        # The rounding error we introduce here makes darbrrb a bad
-        # idea for media smaller than CDs.
-        par_overhead_mb = math.ceil(par_overhead_bytes / 1048576)
-        return self._slice_size_not_counting_par_overhead - par_overhead_mb
+    def slice_size_KiB(self):
+        # This allows for 32-character dar slice filenames.
+        par_header_bytes = 96 + 120 * self.data_discs
+        # Each pXX file has a par header; and for each data_discs
+        # slices, there's a par file
+        par_overhead_bytes = par_header_bytes * (1 + 1 / self.data_discs)
+        par_overhead_KiB = (par_overhead_bytes + 1024) // 1024
+        return self._slice_size_not_counting_par_overhead_KiB - par_overhead_KiB
+
+    # auto-convert between _KiB and _MiB
+    def __getattr__(self, name):
+        if name in dir(self):
+            return getattr(super(), name)
+        else:
+            if name.endswith('_MiB'):
+                as_KiB = name.replace('_MiB', '_KiB')
+                if as_KiB in dir(self):
+                    return getattr(self, as_KiB) / 1024
+            elif name.endswith('_KiB'):
+                as_MiB = name.replace('_KiB', '_MiB')
+                if as_MiB in dir(self):
+                    return getattr(self, as_MiB) * 1024
+            raise AttributeError(name)
 
     # -n switch turns this off
     actually_burn = True
@@ -174,9 +171,9 @@ except ImportError:
 
 def usage(settings):
     print(""" 
-This script makes compressed, encrypted backups with {s.slice_size} MiB \
+This script makes compressed, encrypted backups with {s.slice_size_MiB:0.2f} MiB \
 slices striped
-across sets of {s.total_set_count} {s.disc_size} MiB optical discs, \
+across sets of {s.total_set_count} {s.disc_size_MiB} MiB optical discs, \
 each set containing {s.data_discs} data disc(s)
 and {s.parity_discs} parity disc(s). It \
 requires the following software (or later versions):
@@ -184,7 +181,7 @@ Python 3.2; mock 1.0 (included in Python 3.3); dar 2.4.8; parchive 1.1;
 growisofs 7.1; genisoimage 1.1.11.
 
 When backing up, the directory {s.scratch_dir!r} should have 
-{s.scratch_free_needed} MiB of space free. \
+{s.scratch_free_needed_MiB} MiB of space free. \
 When restoring, copy this script off of the optical
 disc first; you'll need to switch optical discs during the backup.
 
@@ -269,15 +266,15 @@ darbrrb ran dar with this darrc:
 The backup is split into redundancy sets of {s.total_set_count} discs. Out of
 each set, dar archive slices are striped across the {s.data_discs} data
 disc(s); par files with parity data for the dar slices are striped across the
-{s.parity_discs} disc(s). Each disc can store {s.disc_size} MiB of data, and
-each slice is {s.slice_size} MiB in size.
+{s.parity_discs} disc(s). Each disc can store {s.disc_size_MiB} MiB of data, and
+each slice is {s.slice_size_MiB:0.2f} MiB in size.
 
 You may need to do a bit of hunting, then, to find a given slice, but if some
 data is irretrievable from one of the discs, or some discs are missing, you
 should be able to piece the slices back together.
 
 To restore some files: first, make a directory somewhere with at least
-{s.scratch_free_needed} MiB free. Copy the first and last slice of the backup
+{s.scratch_free_needed_MiB:0.0f} MiB free. Copy the first and last slice of the backup
 into your directory. Do some more stuff.
 
 """.format(s=self.settings, contents=self.darrc_contents)
@@ -324,15 +321,16 @@ into your directory. Do some more stuff.
         return "{}-{:04d}-{:03d}".format(basename[:(32-4-3-2)],
                 set_number + 1, number_in_set + 1)
 
-    def scratch_mib_free(self):
+    def scratch_free_MiB(self):
         s = os.statvfs(self.settings.scratch_dir)
         return s.f_bavail * s.f_frsize // 1048576
 
     def ensure_free_space(self):
-        mib_free = self.scratch_mib_free()
-        if mib_free < self.settings.scratch_free_needed:
+        free_space_MiB = self.scratch_free_MiB()
+        if free_space_MiB < self.settings.scratch_free_needed_MiB:
             raise NotEnoughScratchSpace(self.settings.scratch_dir,
-                    self.settings.scratch_free_needed, mib_free)
+                                        self.settings.scratch_free_needed_MiB,
+                                        free_space_MiB)
 
     def ensure_scratch(self):
         if os.path.exists(self.settings.scratch_dir):
@@ -404,10 +402,10 @@ into your directory. Do some more stuff.
                 shutil.move(f, d)
         dars_on_discs = len(glob.glob(
                 os.path.join(self.disc_dir(1), '*.dar')))
-        size_if_we_dont_burn = (dars_on_discs + 1) * \
-                self.settings.slice_size + \
-                self.settings.reserve_space
-        if size_if_we_dont_burn > self.settings.disc_size or \
+        size_if_we_dont_burn_KiB = (dars_on_discs + 1) * \
+                self.settings.slice_size_KiB + \
+                self.settings.reserve_space_KiB
+        if size_if_we_dont_burn_KiB > self.settings.disc_size_KiB or \
                 happening == 'last_slice':
             for i, d in enumerate(self.disc_dirs()):
                 self.log.info("burning from {}".format(d))
@@ -534,7 +532,7 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
     data_discs = 4
     parity_discs = 1
     slices_per_disc = 5
-    pretend_free_space = (data_discs + parity_discs) * 25000
+    pretend_free_space_MiB = (data_discs + parity_discs) * 25000
 
     def setUp(self):
         super().setUp()
@@ -546,8 +544,8 @@ class TestDarbrrbFourPlusOne(UsesTempScratchDir):
         # in our tests, _create is called, as though dar were invoking this
         # script; when dar does that, it's with the scratch dir as the cwd,
         # as tested above
-        with patch.object(Darbrrb, 'scratch_mib_free',
-                return_value=self.pretend_free_space):
+        with patch.object(Darbrrb, 'scratch_free_MiB',
+                          return_value=self.pretend_free_space_MiB):
             self.d = Darbrrb(self.settings, __file__)
             self.d.ensure_scratch()
             self.cwd = os.getcwd()
@@ -672,7 +670,7 @@ class TestWholeBackup(UsesTempScratchDir):
     data_discs = 4
     parity_discs = 1
     slices_per_disc = 5
-    pretend_free_space = (data_discs + parity_discs) * 25000
+    pretend_free_space_MiB = (data_discs + parity_discs) * 25000
 
     def setUp(self):
         super().setUp()
@@ -688,8 +686,8 @@ class TestWholeBackup(UsesTempScratchDir):
         # in our tests, _create is called, as though dar were invoking this
         # script; when dar does that, it's with the scratch dir as the cwd,
         # as tested above
-        with patch.object(Darbrrb, 'scratch_mib_free',
-                return_value=self.pretend_free_space):
+        with patch.object(Darbrrb, 'scratch_free_MiB',
+                          return_value=self.pretend_free_space_MiB):
             self.d = Darbrrb(self.settings, __file__)
             self.d.ensure_scratch()
             self.cwd = os.getcwd()
@@ -829,7 +827,7 @@ class TestWholeBackupThreePlusEight(TestWholeBackup):
     data_discs = 3
     parity_discs = 8
     slices_per_disc = 13 
-    pretend_free_space = (data_discs + parity_discs) * 25000
+    pretend_free_space_MiB = (data_discs + parity_discs) * 25000
 
 # This is just to make sure all those integer divisions and multiplications
 # aren't just happening to be right.
@@ -837,7 +835,7 @@ class TestWholeBackupNineteenPlusSeven(TestWholeBackup):
     data_discs = 19
     parity_discs = 7
     slices_per_disc = 31
-    pretend_free_space = (data_discs + parity_discs) * 25000
+    pretend_free_space_MiB = (data_discs + parity_discs) * 25000
 
 
 if __name__ == '__main__':
