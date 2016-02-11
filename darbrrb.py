@@ -329,11 +329,13 @@ into your directory. Do some more stuff.
         else:
             return os.path.join(self.settings.scratch_dir, disc_title)
 
-    def last_set_directory(self, basename, disc_number_in_set):
+    # zb: zero-based; ob: one-based
+    
+    def last_set_directory(self, basename, disc_number_in_set_zb):
         if self.settings.actually_burn:
             dir = input("insert and mount disc {} from the last set of "
                         "backup {!r} and type the directory where its "
-                        "files can be found: ".format(disc_number_in_set,
+                        "files can be found: ".format(disc_number_in_set_zb + 1,
                                                       basename))
             return dir
         else:
@@ -341,7 +343,7 @@ into your directory. Do some more stuff.
                                           basename + '-*'))
             last_disc_dir = sorted(dirs)[-1]
             disc_in_last_set_dir = '{}{:03d}'.format(last_disc_dir[:-3],
-                                                     disc_number_in_set)
+                                                     disc_number_in_set_zb + 1)
             return disc_in_last_set_dir
 
     def disc_dir(self, disc):
@@ -350,13 +352,13 @@ into your directory. Do some more stuff.
     def disc_dirs(self):
         return sorted(glob.glob('__disc*'))
 
-    def disc_title(self, basename, set_number, disc_in_set_number):
+    def disc_title(self, basename, set_number_zb, disc_in_set_number_zb):
         # Max ISO 9660 vol id length is 32. Leave room for numbers and 2 dashes.
         # +1: These numbers are 0-based, but we want the ones in the title 1-based.
         # If you change the format here, change code above in last_set_directory!
         return "{}-{:04d}-{:03d}".format(basename[:(32-4-3-2)],
-                                         set_number + 1,
-                                         disc_in_set_number + 1)
+                                         set_number_zb + 1,
+                                         disc_in_set_number_zb + 1)
         
     def disc_title_for_slice(self, basename, dar_slice_number):
         set_number = math.floor((dar_slice_number - 1) /
@@ -365,10 +367,10 @@ into your directory. Do some more stuff.
                               self.settings.data_discs)
         return self.disc_title(basename, set_number, disc_in_set_number)
 
-    def disc_title_for_slice_and_disc(self, basename, dar_slice_number, disc_in_set_number):
-        set_number = math.floor((dar_slice_number - 1) /
+    def disc_title_for_slice_and_disc(self, basename, dar_slice_number_ob, disc_in_set_number_zb):
+        set_number_zb = math.floor((dar_slice_number_ob - 1) /
                 self.settings.slices_per_set)
-        return self.disc_title(basename, set_number, disc_in_set_number)
+        return self.disc_title(basename, set_number_zb, disc_in_set_number_zb)
         
     def scratch_free_MiB(self):
         s = os.statvfs(self.settings.scratch_dir)
@@ -466,13 +468,19 @@ into your directory. Do some more stuff.
                 for fn in glob.glob(os.path.join(d, '*')):
                     os.unlink(fn)
 
-    def _obtain_recovery_set_files(self, basename, set_number, last=False):
+    def _obtain_recovery_set_files(self, basename, set_number_zb, last=False):
         pars = []
-        for disc in range(self.settings.total_set_count):
+        # if we need to obtain a set, we are probably done with the
+        # previous one
+        for fn in os.listdir():
+            if (fn.endswith('.dar') or fn.endswith('.par') or
+                re.match(r'.*\.[p-z][0-9][0-9]$', fn)):
+                os.unlink(fn)
+        for disc_zb in range(self.settings.total_set_count):
             if last:
-                disc_dir = self.last_set_directory(basename, disc + 1)
+                disc_dir = self.last_set_directory(basename, disc_zb)
             else:
-                disc_title = self.disc_title(basename, set_number + 1, disc + 1)
+                disc_title = self.disc_title(basename, set_number_zb, disc_zb)
                 disc_dir = self.written_disc_directory(disc_title)
                 print('expecting things from', disc_dir)
             for f in os.listdir(disc_dir):
@@ -493,9 +501,19 @@ into your directory. Do some more stuff.
             # dar wants the last slice but doesn't know its number
             self._obtain_recovery_set_files(basename, 0, last=True)
         else:
-            set_number = math.floor((number - 1) /
-                                    self.settings.slices_per_set)
-            self._obtain_recovery_set_files(basename, set_number)
+            # we are leaking files right now, going for initial
+            # function first then practicality. the file may already
+            # be laying about
+            slice_name = '{{}}.{{:0{}d}}.{{}}'.format(self.settings.digits).format(basename, number, extension)
+            if os.path.exists(slice_name):
+                self.log.debug('the file for slice %s already exists', number)
+                return
+            else:
+                set_number_zb = math.floor((number - 1) /
+                                        self.settings.slices_per_set)
+                self.log.debug('for slice %r we want (zero-based) set %d',
+                               number, set_number_zb)
+                self._obtain_recovery_set_files(basename, set_number_zb)
 
         
 
@@ -967,5 +985,5 @@ if __name__ == '__main__':
         d._create(*remaining[1:])
     elif remaining[0] == '_extract':
         d._extract(*remaining[1:])
-
-
+    else:
+        print("unknown subcommand", remaining)
