@@ -1,6 +1,8 @@
 darbrrb
 =======
 
+[![Build Status](https://travis-ci.org/jaredjennings/darbrrb.svg?branch=master)](https://travis-ci.org/jaredjennings/darbrrb)
+
 This is dar-based Blu-Ray redundant backup. It exists to back up a few
 hundred gigabytes of data onto dozens of optical discs in a way that
 it can be restored ten years later.
