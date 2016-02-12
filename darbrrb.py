@@ -469,7 +469,7 @@ into your directory. Do some more stuff.
                     os.unlink(fn)
 
     def _obtain_recovery_set_files(self, basename, set_number_zb, last=False):
-        pars = []
+        pars = set()
         # if we need to obtain a set, we are probably done with the
         # previous one
         for fn in os.listdir():
@@ -482,16 +482,15 @@ into your directory. Do some more stuff.
             else:
                 disc_title = self.disc_title(basename, set_number_zb, disc_zb)
                 disc_dir = self.written_disc_directory(disc_title)
-                print('expecting things from', disc_dir)
             for f in os.listdir(disc_dir):
                 if f.endswith('.par'):
-                    pars.append(f)
+                    pars.add(f)
                 # these have to be copies not symlinks because one of
                 # the *.dar files may be corrupt and parchive may try
                 # to overwrite it; if so, it must succeed
                 shutil.copyfile(os.path.join(disc_dir, f),
                                 os.path.join(self.settings.scratch_dir, f))
-        for parfilename in pars:
+        for parfilename in sorted(list(pars)):
             self._run('parchive', 'r', parfilename)
             
 
@@ -501,11 +500,11 @@ into your directory. Do some more stuff.
             # dar wants the last slice but doesn't know its number
             self._obtain_recovery_set_files(basename, 0, last=True)
         else:
-            # we are leaking files right now, going for initial
-            # function first then practicality. the file may already
-            # be laying about
             slice_name = '{{}}.{{:0{}d}}.{{}}'.format(self.settings.digits).format(basename, number, extension)
             if os.path.exists(slice_name):
+                # the first time this gets called with a real number,
+                # happening is still 'init' so the hawkeyed will see
+                # one of these messages before we go back to set 1
                 self.log.debug('the file for slice %s already exists', number)
                 return
             else:
@@ -576,6 +575,10 @@ class UsesTempScratchDir(unittest.TestCase):
         self.touch(*(self.dar_filename_format.format(basename,n)
                 for n in range(min, max+1)))
 
+    def touch_dar_file_in_output_dir(self, dir, basename, n):
+        filename = self.dar_filename_format.format(basename, n)
+        self.touch(os.path.join(dir, filename))
+        
     @property
     def par_main_format(self):
         return '{{}}.{0}-{0}.par'.format(self.settings.number_format)
@@ -584,8 +587,7 @@ class UsesTempScratchDir(unittest.TestCase):
     def par_volume_format(self):
         return '{{}}.{0}-{0}.{{}}{{:02d}}'.format(self.settings.number_format)
 
-    def touch_par_files(self, basename, min_, max_, count):
-        self.touch(self.par_main_format.format(basename, min_, max_))
+    def par_volume_names(self, basename, min_, max_, count):
         possible_volume_letters = 'pqrstuvxwyz'
         for i in range(count):
             # name.p00, name.p01, ..., name.p99, name.q00, ...
@@ -593,8 +595,21 @@ class UsesTempScratchDir(unittest.TestCase):
             number = i % 100
             pfn = self.par_volume_format.format(basename, min_, max_,
                                                 letter, number)
+            yield pfn
+
+    def touch_par_files(self, basename, min_, max_, count):
+        self.touch(self.par_main_format.format(basename, min_, max_))
+        for pfn in self.par_volume_names(basename, min_, max_, count):
             self.par_pxx_files_created.append(pfn)
             self.touch(pfn)
+
+    def touch_par_file_in_output_dir(self, dir, basename, min_, max_):
+        fn = os.path.join(dir,
+                          self.par_main_format.format(basename, min_, max_))
+        self.log.debug('touching %r', fn)
+        self.touch(fn)
+
+
 
 
 class TestWorkingDirectoryContextManager(unittest.TestCase):
@@ -947,6 +962,198 @@ class TestReallySmallDiscs(TestWholeBackup):
     slices_per_disc = 50
     pretend_free_space = (data_discs + parity_discs) * 25000
     disc_size_MiB = 30
+
+
+
+
+
+
+@patch.object(Darbrrb, '_run')
+class TestWholeRestore(UsesTempScratchDir):
+    data_discs = 4
+    parity_discs = 1
+    slices_per_disc = 5
+    pretend_free_space_MiB = (data_discs + parity_discs) * 25000
+
+    def setUp(self):
+        super().setUp()
+        self.log = logging.getLogger('test code')
+        self.settings.data_discs = self.data_discs
+        self.settings.parity_discs = self.parity_discs
+        self.settings.slices_per_disc = self.slices_per_disc
+        self.settings.actually_burn = False
+        # all tests not written with a small disc size expect a large one.
+        self.settings.disc_size_MiB = getattr(self, 'disc_size_MiB', 23841)
+        self.settings.burner_device = '/dev/zero'
+        # in our tests, _create is called, as though dar were invoking this
+        # script; when dar does that, it's with the scratch dir as the cwd,
+        # as tested above
+        with patch.object(Darbrrb, 'scratch_free_MiB',
+                          return_value=self.pretend_free_space_MiB):
+            self.d = Darbrrb(self.settings, __file__)
+            self.d.ensure_scratch()
+            self.cwd = os.getcwd()
+            os.chdir(self.settings.scratch_dir)
+        from hashlib import sha256
+        self.basename = sha256(bytes(self.__class__.__name__, 'ascii')).hexdigest()[:8]
+        self.discs_consumed = []
+        self.complete_redundancy_sets = 2
+        # two whole redundancy sets
+        # a couple of file sets, not enough to make a redundancy set
+        # a couple of odd files
+        sett = self.settings
+        self.dar_consume_slices_count = \
+                sett.slices_per_disc * sett.data_discs * \
+                        self.complete_redundancy_sets + \
+                sett.slices_per_disc * sett.data_discs // 2 + \
+                sett.data_discs // 2
+        self.log.debug('dar_consume_slices_count is %d',
+                       self.dar_consume_slices_count)
+        # BWAHAHAHAA this painful thing is so the main code and the
+        # test will be coded differently.
+        data_set_and_disc_zb = itertools.chain(
+            # complete sets
+            itertools.chain.from_iterable(
+                itertools.islice(zip(itertools.repeat(setno),
+                                     itertools.cycle(range(sett.data_discs))),
+                                 sett.slices_per_disc * sett.data_discs)
+                for setno in range(self.complete_redundancy_sets)),
+            # now the last set
+            itertools.chain.from_iterable(
+                itertools.islice(zip(itertools.repeat(setno),
+                                     itertools.cycle(range(sett.data_discs))),
+                                 (sett.slices_per_disc * sett.data_discs // 2 +
+                                  sett.data_discs // 2))
+                for setno in range(self.complete_redundancy_sets,
+                                   self.complete_redundancy_sets+1)))
+        data_set_and_disc_zb = list(data_set_and_disc_zb)
+        for slice_zb, (setno_zb, disc_zb) in zip(
+                range(self.dar_consume_slices_count),
+                data_set_and_disc_zb):
+            # disc_title gets tested above, so we'll just use it here
+            disc_title = self.d.disc_title(self.basename, setno_zb, disc_zb)
+            self.touch_dar_file_in_output_dir(disc_title, self.basename,
+                                              slice_zb+1)
+            # par files go on every data disc
+            self.touch_par_file_in_output_dir(disc_title, self.basename,
+                                              (slice_zb - disc_zb)+1,
+                                              min(((slice_zb - disc_zb)+1 +
+                                                   self.data_discs-1),
+                                                  self.dar_consume_slices_count))
+        parity_set_and_disc_zb = itertools.chain(
+            # complete sets
+            itertools.chain.from_iterable(
+                itertools.islice(zip(itertools.repeat(setno),
+                                     itertools.cycle(range(sett.data_discs,
+                                                           (sett.data_discs +
+                                                            sett.parity_discs)))),
+                                 sett.slices_per_disc * sett.parity_discs)
+                for setno in range(self.complete_redundancy_sets+2)))
+            # now the last set
+            # itertools.chain.from_iterable(
+            #     itertools.islice(zip(itertools.repeat(setno),
+            #                          itertools.cycle(range(sett.data_discs,
+            #                                                (sett.data_discs +
+            #                                                 sett.parity_discs)))),
+            #                      (sett.slices_per_disc * sett.parity_discs // 2 +
+            #                       sett.parity_discs // 2))
+            #     for setno in range(self.complete_redundancy_sets,
+            #                        self.complete_redundancy_sets+1)))
+        parity_set_and_disc_zb = list(parity_set_and_disc_zb)
+        mins_and_maxes = itertools.chain.from_iterable(
+            map(itertools.repeat, zip(
+                range(0, self.dar_consume_slices_count, self.data_discs),
+                itertools.chain(
+                    range(self.data_discs-1, self.dar_consume_slices_count,
+                          self.data_discs),
+                    itertools.repeat(self.dar_consume_slices_count-1))),
+                           itertools.repeat(self.parity_discs)))
+        mins_and_maxes = list(mins_and_maxes)
+        for (min_zb, max_zb), (setno_zb, disc_zb) in zip(
+                mins_and_maxes,
+                parity_set_and_disc_zb):
+            disc_title = self.d.disc_title(self.basename, setno_zb, disc_zb)
+            self.touch_par_file_in_output_dir(disc_title, self.basename,
+                                              min_zb+1, max_zb+1)
+        # cheat: we don't touch the par volume files. only the real
+        # parchive actually needs them!
+#        os.system('bash')
+
+        
+            
+        
+    def tearDown(self):
+        super().tearDown()
+        os.chdir(self.cwd)
+
+    def mock_dar(self, *args):
+        # set self.dar_consume_slices_count before you run this method
+        #
+        # we assume here that dar is being called to extract the archive
+        # args goes like dar -x basename -R root_of_files_to_save
+        dir = args[-1]
+        basename = args[2]
+        # get last slice
+        self.d._extract(dir, basename, '0', 'dar', 'init')
+        self.d._extract(dir, basename, self.dar_consume_slices_count, 'dar', 'init')
+        for slice in range(self.dar_consume_slices_count):
+            # slice is zero-based but dar is one-based
+            self.d._extract(dir, basename, str(slice+1), 'dar', 'operating')
+
+    def mock_parchive(self, *args):
+        # expected args: parchive r parfile
+        # parfile is named {basename}.{slicemin}-{slicemax}.par
+        parfile = args[2]
+        # put logic here in future to mock one or more of the files
+        # being invalid or missing
+
+    def mock__run(self, *args):
+        # self.log.debug('args are %r', args)
+        if args[0] == 'dar':
+            self.mock_dar(*args)
+        elif args[0] == 'parchive':
+            self.mock_parchive(*args)
+        else:
+            raise Exception('unknown command run under test', args)
+
+    def testWholeRestore(self, _run):
+        dir = 'dir'
+        _run.side_effect = self.mock__run
+        # we run parchive for the last set, then once for each set
+        # for each complete or partial (at end) set of {data_discs} dar files,
+        # we run parchive once
+        sett = self.settings
+        expected_pars_run = ((sett.slices_per_disc // 2 + 1) +
+                             (sett.slices_per_disc *
+                              self.complete_redundancy_sets) +
+                             (sett.slices_per_disc // 2 + 1))
+        # --- run code
+        self.d.dar('-x', self.basename, '-R', '/fnord')
+        # --- assertions
+        self.log.debug('calls:')
+        for c in self.d._run.call_args_list:
+            self.log.debug('%r', c)
+        def calls_running(executable):
+            return list(x for x in self.d._run.call_args_list 
+                    if x[0][0] == executable)
+        self.assertEqual(len(calls_running('parchive')), expected_pars_run)
+        # not tested so far:
+        # * only the files for one set are in the scratch dir at once
+
+
+class TestWholeRestoreThreePlusEight(TestWholeRestore):
+    data_discs = 3
+    parity_discs = 8
+    slices_per_disc = 13 
+    pretend_free_space_MiB = (data_discs + parity_discs) * 25000
+
+class TestWholeRestoreNineteenPlusSeven(TestWholeRestore):
+    data_discs = 19
+    parity_discs = 7
+    slices_per_disc = 31
+    pretend_free_space_MiB = (data_discs + parity_discs) * 25000
+
+
 
 if __name__ == '__main__':
     s = Settings()
