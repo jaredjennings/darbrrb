@@ -264,7 +264,7 @@ archiver and the parchive file verification and repair tool to produce backups
 with redundancy, for greater resilience against data loss due to backup media
 failures or losses.
 
-The darbrrb.py script you find on this disc is a copy of the one used to make
+The {progname} script you find on this disc is a copy of the one used to make
 the backup; some salient settings are written toward the top of this file.
 darbrrb ran dar with this darrc:
 
@@ -286,7 +286,8 @@ To restore some files: first, make a directory somewhere with at least
 {s.scratch_free_needed_MiB:0.0f} MiB free. Copy the first and last slice of the backup
 into your directory. Do some more stuff.
 
-""".format(s=self.settings, contents=self.darrc_contents)
+""".format(s=self.settings, contents=self.darrc_contents,
+           progname=os.path.basename(self.progname))
     # FIXME
 
 
@@ -907,7 +908,11 @@ class TestWholeBackup(UsesTempScratchDir):
             for disc_in_set in range(sett.total_set_count):
                 b = self.discs_burned[disc]
                 self.assertTrue('README.txt' in b)
-                self.assertTrue('darbrrb.py' in b)
+                this_script = os.path.basename(__file__)
+                self.log.debug('__file__ is %s', this_script)
+                # this will likely be darbrrb.py - but it isn't
+                # certain. see when self.d gets created above
+                self.assertTrue(this_script in b)
                 dars_on_b = [x for x in b if x.endswith('.dar')]
                 # the code uses regexes; let's use a different way
                 # here in the test for thoroughness
