@@ -266,6 +266,11 @@ failures or losses.
 
 The {progname} script you find on this disc is a copy of the one used to make
 the backup; some salient settings are written toward the top of this file.
+
+darbrrb was run with these arguments:
+
+{argv!r}
+
 darbrrb ran dar with this darrc:
 
 # ----------------
@@ -278,15 +283,17 @@ disc(s); par files with parity data for the dar slices are striped across the
 {s.parity_discs} disc(s). Each disc can store {s.disc_size_MiB} MiB of data, and
 each slice is {s.slice_size_MiB:0.2f} MiB in size.
 
-You may need to do a bit of hunting, then, to find a given slice, but if some
-data is irretrievable from one of the discs, or some discs are missing, you
-should be able to piece the slices back together.
-
 To restore some files: first, make a directory somewhere with at least
-{s.scratch_free_needed_MiB:0.0f} MiB free. Copy the first and last slice of the backup
-into your directory. Do some more stuff.
+{s.scratch_free_needed_MiB:0.0f} MiB free. Copy this script from a disc of the backup
+into your directory. Run it with arguments like those above, but replace the
+c with an x (you are extracting an archive instead of creating it), and replace
+the value of the -R switch, which was the directory where all the files were
+backed up from, with the directory to which you want the files restored.
 
-""".format(s=self.settings, contents=self.darrc_contents,
+You'll be asked for discs from the backup.
+
+""".format(argv=sys.argv, s=self.settings,
+           contents=self.darrc_contents,
            progname=os.path.basename(self.progname))
     # FIXME
 
