@@ -172,6 +172,8 @@ import re
 import itertools
 import random
 import math
+import pickle
+import base64
 try:
     from unittest.mock import Mock, patch, sentinel, call
 except ImportError:
@@ -257,6 +259,12 @@ class Darbrrb:
 
     @property
     def readme(self):
+        if 'DARBRRB_ORIGINAL_ARGV' in os.environ:
+            try:
+                original_argv = pickle.loads(
+                    base64.b64decode(os.environ['DARBRRB_ORIGINAL_ARGV']))
+            except:
+                original_argv = ['unknown']
         return """
 
 This disc is part of a backup made by darbrrb, a tool that wraps the dar disk
@@ -286,13 +294,14 @@ each slice is {s.slice_size_MiB:0.2f} MiB in size.
 To restore some files: first, make a directory somewhere with at least
 {s.scratch_free_needed_MiB:0.0f} MiB free. Copy this script from a disc of the backup
 into your directory. Run it with arguments like those above, but replace the
-c with an x (you are extracting an archive instead of creating it), and replace
-the value of the -R switch, which was the directory where all the files were
-backed up from, with the directory to which you want the files restored.
+-c with a -x (you are extracting an archive instead of creating it), and
+replace the value of the -R switch, which was the directory where all the
+files were backed up from, with the directory to which you want the files
+restored.
 
 You'll be asked for discs from the backup.
 
-""".format(argv=sys.argv, s=self.settings,
+""".format(argv=original_argv, s=self.settings,
            contents=self.darrc_contents,
            progname=os.path.basename(self.progname))
     # FIXME
@@ -1198,6 +1207,9 @@ if __name__ == '__main__':
         sys.exit(unittest.main())
     d = Darbrrb(s, __file__, opts)
     if remaining[0] == 'dar':
+        print(repr(sys.argv))
+        os.environ['DARBRRB_ORIGINAL_ARGV'] = base64.b64encode(
+            pickle.dumps(sys.argv, protocol=0)).decode('UTF-8')
         d.ensure_scratch()
         d.dar(*remaining[1:])
     elif remaining[0] == '_create':
