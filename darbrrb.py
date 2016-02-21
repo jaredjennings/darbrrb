@@ -264,7 +264,9 @@ class Darbrrb:
                 original_argv = pickle.loads(
                     base64.b64decode(os.environ['DARBRRB_ORIGINAL_ARGV']))
             except:
-                original_argv = ['unknown']
+                original_argv = ['there was an error trying to find out']
+        else:
+            original_argv = ['not known']
         return """
 
 This disc is part of a backup made by darbrrb, a tool that wraps the dar disk
