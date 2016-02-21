@@ -196,6 +196,9 @@ When backing up, the directory {s.scratch_dir!r} should have
 When restoring, copy this script off of the optical
 disc first; you'll need to switch optical discs during the backup.
 
+If you don't like any of these settings, change this script. The
+settings are toward the top.
+
 Usage: python3 {progname} [-v] [-n] dar <dar parameters>
 
 Dar parameters of note:
@@ -257,8 +260,7 @@ class Darbrrb:
                         os.path.basename(self.progname)),
                 progargs=' '.join(progargs))
 
-    @property
-    def readme(self):
+    def readme(self, basename):
         if 'DARBRRB_ORIGINAL_ARGV' in os.environ:
             try:
                 original_argv = pickle.loads(
@@ -303,9 +305,26 @@ restored.
 
 You'll be asked for discs from the backup.
 
+About the files that may be on this disc:
+
+* README.txt: this file.
+* {progname}: the darbrrb script used to make the backup.
+* {basename}.{one}.dar (e.g.): A dar slice file. This contains the data that
+  was backed up.
+* {basename}.{one}-{fddn}.par (e.g.): a par index file for a parity volume
+  set made over several dar slice files. It contains checksums for each of
+  the slice files in the set.
+* {basename}.{one}-{fddn}.p01 (e.g.): a par parity volume file for the
+  aforementioned parity volume set. This contains redundant data, such that
+  if any of the dar slices in the set is missing or corrupted, it can be re-
+  constructed.
+
 """.format(argv=original_argv, s=self.settings,
            contents=self.darrc_contents,
-           progname=os.path.basename(self.progname))
+           progname=os.path.basename(self.progname),
+           basename=basename,
+           one=self.settings.number_format.format(1),
+           fddn=self.settings.number_format.format(self.settings.data_discs))
     # FIXME
 
 
@@ -461,7 +480,7 @@ You'll be asked for discs from the backup.
             for d in self.disc_dirs():
                 shutil.copyfile(parfilename, os.path.join(d, parfilename))
                 with io.open(os.path.join(d, 'README.txt'), 'wt') as readme:
-                    readme.write(self.readme)
+                    readme.write(self.readme(basename))
                 this_program = os.path.basename(self.progname)
                 shutil.copyfile(this_program, os.path.join(d, this_program))
             data_dirs = itertools.cycle(self.disc_dir(i+1)
