@@ -1221,23 +1221,29 @@ if __name__ == '__main__':
     # style only influences how format is interpreted, not also how values are
     # interpolated into log messages. source: Python 3.2
     # logging/__init__.py:317, LogRecord class, getMessage method.
-    logging.basicConfig(style='{', format='{name}: {message}',
-            level=loglevel, stream=sys.stderr)
-    logging.debug('darbrrb: called with args %r', sys.argv)
+    logging.basicConfig(style='{', format='darbrrb {process} '
+                        '[{asctime}] {name}: {message}',
+                        level=loglevel, stream=sys.stderr)
+    log = logging.getLogger('__main__'.format(os.getpid()))
+    log.debug('called with args %r', sys.argv)
     if testing:
         # strip off switches: they are not for unittest.main
         sys.argv = [sys.argv[0]] + remaining
         sys.exit(unittest.main())
     d = Darbrrb(s, __file__, opts)
-    if remaining[0] == 'dar':
-        print(repr(sys.argv))
-        os.environ['DARBRRB_ORIGINAL_ARGV'] = base64.b64encode(
-            pickle.dumps(sys.argv, protocol=0)).decode('UTF-8')
-        d.ensure_scratch()
-        d.dar(*remaining[1:])
-    elif remaining[0] == '_create':
-        d._create(*remaining[1:])
-    elif remaining[0] == '_extract':
-        d._extract(*remaining[1:])
-    else:
-        print("unknown subcommand", remaining)
+    try:
+        if remaining[0] == 'dar':
+            os.environ['DARBRRB_ORIGINAL_ARGV'] = base64.b64encode(
+                pickle.dumps(sys.argv, protocol=0)).decode('UTF-8')
+            d.ensure_scratch()
+            d.dar(*remaining[1:])
+        elif remaining[0] == '_create':
+            d._create(*remaining[1:])
+        elif remaining[0] == '_extract':
+            d._extract(*remaining[1:])
+        else:
+            raise Exception("unknown subcommand", remaining)
+        log.debug('execution ended without exception')
+    except Exception as e:
+        log.exception('execution ended abnormally')
+        raise
