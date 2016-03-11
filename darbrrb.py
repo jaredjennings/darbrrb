@@ -31,6 +31,8 @@ darrc_template = """
 # DO NOT specify the AES key here: this script is burned on every
 # backup disc, in the clear
 --key aes:
+# don't back up caches, e.g. Firefox cache
+--cache-directory-tagging
 -v
 create:
 --compression=bzip2
