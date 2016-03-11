@@ -1223,7 +1223,9 @@ if __name__ == '__main__':
     # logging/__init__.py:317, LogRecord class, getMessage method.
     logging.basicConfig(style='{', format='{name}: {message}',
             level=loglevel, stream=sys.stderr)
+    logging.debug('darbrrb: called with args %r', sys.argv)
     if testing:
+        # strip off switches: they are not for unittest.main
         sys.argv = [sys.argv[0]] + remaining
         sys.exit(unittest.main())
     d = Darbrrb(s, __file__, opts)
