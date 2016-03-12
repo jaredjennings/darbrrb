@@ -1223,9 +1223,19 @@ if __name__ == '__main__':
     # style only influences how format is interpreted, not also how values are
     # interpolated into log messages. source: Python 3.2
     # logging/__init__.py:317, LogRecord class, getMessage method.
-    logging.basicConfig(style='{', format='darbrrb {process} '
-                        '[{asctime}] {name}: {message}',
-                        level=loglevel, stream=sys.stderr)
+    fmt = logging.Formatter(style='{', fmt='darbrrb {process} '
+                        '[{asctime}] {name}: {message}')
+    stream = logging.StreamHandler(sys.stderr)
+    stream.setFormatter(fmt)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(stream)
+    root_logger.setLevel(loglevel)
+    # dar expects its stdin and stdout to be a terminal so we will
+    # make a log file for our messages rather than depend on
+    # redirection
+    logfile = logging.FileHandler('darbrrb.log')
+    logfile.setFormatter(fmt)
+    root_logger.addHandler(logfile)
     log = logging.getLogger('__main__'.format(os.getpid()))
     log.debug('called with args %r', sys.argv)
     if testing:
