@@ -190,8 +190,17 @@ across sets of {s.total_set_count} {s.disc_size_MiB} MiB optical discs, \
 each set containing {s.data_discs} data disc(s)
 and {s.parity_discs} parity disc(s). It \
 requires the following software (or later versions):
-Python 3.2; mock 1.0 (included in Python 3.3); dar 2.4.8; parchive 1.1;
+Python 3.2; mock 1.0 (included in Python 3.3); dar 2.5.4*; parchive 1.1;
 growisofs 7.1; genisoimage 1.1.11.
+
+* If you are encrypting, you need change 8e64f413. If you have dar
+2.5.4 or later, you have change 8e64f413. If you don't (2.5.4 is not
+yet released as of this writing), you will need to build the
+branch_2.5.x branch of dar yourself. See
+<https://sourceforge.net/p/dar/bugs/183/> and
+<https://sourceforge.net/p/dar/code/ci/8e64f413deb046064156792078060d2ee6ea4e5c/>.
+If you are not using encryption, any recent dar will do (2.4.8 did
+fine without encryption, for example).
 
 When backing up, the directory {s.scratch_dir!r} should have 
 {s.scratch_free_needed_MiB} MiB of space free. \
