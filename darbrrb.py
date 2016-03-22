@@ -1242,7 +1242,7 @@ if __name__ == '__main__':
     # dar expects its stdin and stdout to be a terminal so we will
     # make a log file for our messages rather than depend on
     # redirection
-    logfile = logging.FileHandler('darbrrb.log')
+    logfile = logging.FileHandler('darbrrb.log.{}'.format(os.getpid()))
     logfile.setFormatter(fmt)
     root_logger.addHandler(logfile)
     log = logging.getLogger('__main__'.format(os.getpid()))
