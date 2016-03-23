@@ -255,8 +255,34 @@ class Darbrrb:
         self.log = logging.getLogger('darbrrb')
 
     def _run(self, *args):
-        self.log.info('running command {!r}'.format(args))
-        subprocess.check_call(args)
+        try_again = True
+        while try_again:
+            self.log.info('running command {!r}'.format(args))
+            try:
+                subprocess.check_call(args)
+            except subprocess.CalledProcessError as e:
+                self.log.exception('an error was encountered '
+                                   'when running command {!r}'.format(args))
+                valid_input = False
+                while not valid_input:
+                    the_input = input('Something went wrong '
+                                      'when running command {!r}. '
+                                      'Try again? [Y/n] '.format(args))
+                    if the_input == '':
+                        valid_input = True
+                        try_again = True
+                    elif (the_input.startswith('y') or
+                          the_input.startswith('Y')):
+                        valid_input = True
+                        try_again = True
+                    elif (the_input.startswith('n') or
+                          the_input.startswith('N')):
+                        valid_input = True
+                        try_again = False
+                        self.log.error('re-raising the error')
+                        raise
+                    if not valid_input:
+                        print('Did not understand your input. Asking again.')
 
     @property
     def darrc_contents(self):
