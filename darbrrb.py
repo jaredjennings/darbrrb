@@ -634,21 +634,12 @@ About the files that may be on this disc:
         for parfilename in pars_hereafter:
             self._run('parchive', 'r', parfilename)
 
-
-    def _obtain_recovery_set_files(self, basename, set_number_zb, last=False):
-        if last:
-            self._fetch_some_slices(basename,
-                                    *self._last_parity_set_slices_zb(basename))
-        else:
-            self._fetch_some_slices(basename, (set_number_zb *
-                                               self.settings.slices_per_set))
-            
-
     def _extract(self, dir, basename, number, extension, happening):
         number = int(number)
         if number == 0:
             # dar wants the last slice but doesn't know its number
-            self._obtain_recovery_set_files(basename, 0, last=True)
+            self._fetch_some_slices(basename,
+                                    *self._last_parity_set_slices_zb(basename))
         else:
             slice_name = self._slice_name(basename, number, extension)
             if os.path.exists(slice_name):
@@ -658,12 +649,7 @@ About the files that may be on this disc:
                 self.log.debug('the file for slice %s already exists', number)
                 return
             else:
-                set_number_zb = math.floor((number - 1) /
-                                        self.settings.slices_per_set)
-                self.log.debug('for slice %r we want (zero-based) set %d',
-                               number, set_number_zb)
-                self._obtain_recovery_set_files(basename, set_number_zb)
-
+                self._fetch_some_slices(basename, number)
         
 
 class TestDigits(unittest.TestCase):
