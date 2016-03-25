@@ -245,6 +245,8 @@ class NotEnoughScratchSpace(Exception):
 class ScratchAlreadyExists(Exception):
     pass
 
+parity_volume_re = re.compile(r'.*\.[pqr][0-9][0-9]')
+
 # This is a class not because it needs state, but because I didn't want to pass
 # settings around all the time
 class Darbrrb:
@@ -473,13 +475,16 @@ About the files that may be on this disc:
                 os.path.join(self.settings.scratch_dir,
                         os.path.basename(self.progname)))
 
+    def _par_filename(self, basename, min_number, max_number):
+        parformat = "{{}}.{0}-{0}.par".format(self.settings.number_format)
+        return parformat.format(basename, min_number, max_number)
+
     def make_redundancy_files(self, basename, dar_files, max_number):
         nslices = len(dar_files)
         if nslices == 0:
             raise ValueError('no dar slices for parchive to operate on')
         min_number = max_number - nslices + 1
-        parformat = "{{}}.{0}-{0}.par".format(self.settings.number_format)
-        parfilename = parformat.format(basename, min_number, max_number)
+        parfilename = self._par_filename(basename, min_number, max_number)
         self._run(*(['parchive',
                      '-n{}'.format(self.settings.parity_discs),
                      'a', parfilename,
@@ -513,7 +518,7 @@ About the files that may be on this disc:
             parfilename = self.make_redundancy_files(
                     basename, dar_files_here, number)
             par_volumes = [f for f in os.listdir()
-                           if re.match(r'.*\.[pqr][0-9][0-9]$', f)]
+                           if parity_volume_re.match(f)]
             for d in self.disc_dirs():
                 shutil.copyfile(parfilename, os.path.join(d, parfilename))
                 with io.open(os.path.join(d, 'README.txt'), 'wt') as readme:
@@ -543,30 +548,100 @@ About the files that may be on this disc:
                 for fn in glob.glob(os.path.join(d, '*')):
                     os.unlink(fn)
 
-    def _obtain_recovery_set_files(self, basename, set_number_zb, last=False):
-        pars = set()
-        # if we need to obtain a set, we are probably done with the
-        # previous one
-        for fn in os.listdir():
-            if (fn.endswith('.dar') or fn.endswith('.par') or
-                re.match(r'.*\.[p-z][0-9][0-9]$', fn)):
-                os.unlink(fn)
+    def _slice_name(self, basename, number, extension):
+        return '{{}}.{{:0{}d}}.{{}}'.format(self.settings.digits).format(
+            basename, number, extension)
+
+    def _number_from_slice_name_ob(self, filename):
+        return int(filename.split('.')[-2], 10)
+
+    def _number_from_slice_name_zb(self, filename):
+        return self._number_from_slice_name_ob(filename) - 1
+
+    def _numbers_from_par_filename_ob(self, filename):
+        # maybe.dots.here.XXXXX-YYYYY.par
+        numbers = filename.split('.')[-2]
+        first_s, last_s = numbers.split('-')
+        first_ob = int(first_s, 10)
+        last_ob = int(last_s, 10)
+        return (first_ob, last_ob)
+
+    def _numbers_from_par_filename_zb(self, filename):
+        a, b = self._numbers_from_par_filename_ob(filename)
+        return (a-1, b-1)
+
+    def _last_parity_set_slices_zb(self, basename):
+        # SIDE EFFECT: compels the insertion of the first disc in the
+        # last set.
+        #
+        # Any disc in a set has all the pars from the set. The name of
+        # the par file contains the slice numbers in the set. So WLOG
+        # we ask for the first disc.
+        disc_dir = self.last_set_directory(basename, 0)
+        self.log.debug('first disc in last set is %r', disc_dir)
+        last_par = sorted([x for x in os.listdir(disc_dir)
+                           if x.endswith('.par')])[-1]
+        self.log.debug('last_par is %r', last_par)
+        return self._numbers_from_par_filename_zb(last_par)
+
+    def _fetch_some_slices(self, basename, first_slice_zb, last_slice_zb=None):
+        self.log.debug('_fetch_some_slices(%r, %r)', first_slice_zb, last_slice_zb)
+        # we need entire parity sets, so if slice_number_zb is in the
+        # middle of a set, we start at the beginning of the set
+        first_slice_zb -= first_slice_zb % self.settings.data_discs
+        set_number_zb = math.floor(first_slice_zb /
+                                   self.settings.slices_per_set)
+        self.log.debug('for slice %r (zb) et seq we want set (zb) %d',
+                       first_slice_zb, set_number_zb)
+        # MAYBE FIXME: we take the set of .par files on the first disc
+        # of the set as authoritative; if any are missing I'm not sure
+        # what would happen.
+        disc_zb = 0
+        disc_title = self.disc_title(basename, set_number_zb, disc_zb)
+        disc_dir = self.written_disc_directory(disc_title)
+        pars = sorted([x for x in os.listdir(disc_dir) if x.endswith('.par')])
+        self.log.debug('pars: %r', pars)
+        parity_set_ranges = [self._numbers_from_par_filename_zb(p) for p in pars]
+        parity_sets_hereafter = [(a,b) for a,b in parity_set_ranges 
+                                 if a >= first_slice_zb]
+        pars_hereafter = [self._par_filename(basename, a+1, b+1)
+                          for a,b in parity_sets_hereafter]
+        self.log.debug('pars_hereafter (after slice %d, %d in set %d): %r',
+                       first_slice_zb,
+                       first_slice_zb % self.settings.slices_per_set,
+                       set_number_zb,
+                       pars_hereafter)
+        if last_slice_zb is None:
+            max_last_slice_zb = parity_sets_hereafter[-1][-1]
+            # insert smarts here. for now we just get all the stuff in
+            # the set.
+            last_slice_zb = max_last_slice_zb
+        
         for disc_zb in range(self.settings.total_set_count):
-            if last:
-                disc_dir = self.last_set_directory(basename, disc_zb)
-            else:
-                disc_title = self.disc_title(basename, set_number_zb, disc_zb)
-                disc_dir = self.written_disc_directory(disc_title)
+            disc_title = self.disc_title(basename, set_number_zb, disc_zb)
+            disc_dir = self.written_disc_directory(disc_title)
             for f in os.listdir(disc_dir):
-                if f.endswith('.par'):
-                    pars.add(f)
-                # these have to be copies not symlinks because one of
-                # the *.dar files may be corrupt and parchive may try
-                # to overwrite it; if so, it must succeed
-                shutil.copyfile(os.path.join(disc_dir, f),
-                                os.path.join(self.settings.scratch_dir, f))
-        for parfilename in sorted(list(pars)):
+                if f.endswith('.dar'):
+                    n = self._number_from_slice_name_zb(f)
+                    if n >= first_slice_zb and n <= last_slice_zb:
+                        shutil.copyfile(os.path.join(disc_dir, f),
+                                        os.path.join(self.settings.scratch_dir, f))
+                elif parity_volume_re.match(f):
+                    a, b = self._numbers_from_par_filename_zb(f)
+                    if a >= first_slice_zb and b <= last_slice_zb:
+                        shutil.copyfile(os.path.join(disc_dir, f),
+                                        os.path.join(self.settings.scratch_dir, f))
+        for parfilename in pars_hereafter:
             self._run('parchive', 'r', parfilename)
+
+
+    def _obtain_recovery_set_files(self, basename, set_number_zb, last=False):
+        if last:
+            self._fetch_some_slices(basename,
+                                    *self._last_parity_set_slices_zb(basename))
+        else:
+            self._fetch_some_slices(basename, (set_number_zb *
+                                               self.settings.slices_per_set))
             
 
     def _extract(self, dir, basename, number, extension, happening):
@@ -575,7 +650,7 @@ About the files that may be on this disc:
             # dar wants the last slice but doesn't know its number
             self._obtain_recovery_set_files(basename, 0, last=True)
         else:
-            slice_name = '{{}}.{{:0{}d}}.{{}}'.format(self.settings.digits).format(basename, number, extension)
+            slice_name = self._slice_name(basename, number, extension)
             if os.path.exists(slice_name):
                 # the first time this gets called with a real number,
                 # happening is still 'init' so the hawkeyed will see
@@ -1198,11 +1273,12 @@ class TestWholeRestore(UsesTempScratchDir):
     def testWholeRestore(self, _run):
         dir = 'dir'
         _run.side_effect = self.mock__run
-        # we run parchive for the last set, then once for each set
+        # we run parchive once to get the last slice. then,
+        #
         # for each complete or partial (at end) set of {data_discs} dar files,
         # we run parchive once
         sett = self.settings
-        expected_pars_run = ((sett.slices_per_disc // 2 + 1) +
+        expected_pars_run = (1 +
                              (sett.slices_per_disc *
                               self.complete_redundancy_sets) +
                              (sett.slices_per_disc // 2 + 1))
@@ -1215,6 +1291,7 @@ class TestWholeRestore(UsesTempScratchDir):
         def calls_running(executable):
             return list(x for x in self.d._run.call_args_list 
                     if x[0][0] == executable)
+        self.log.debug(calls_running('parchive'))
         self.assertEqual(len(calls_running('parchive')), expected_pars_run)
         # not tested so far:
         # * only the files for one set are in the scratch dir at once
