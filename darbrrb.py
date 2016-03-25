@@ -586,7 +586,7 @@ About the files that may be on this disc:
 
     def _fetch_some_slices(self, basename, first_slice_zb, last_slice_zb=None):
         self.log.debug('_fetch_some_slices(%r, %r)', first_slice_zb, last_slice_zb)
-        # we need entire parity sets, so if slice_number_zb is in the
+        # we need entire parity sets, so if first_slice_zb is in the
         # middle of a set, we start at the beginning of the set
         first_slice_zb -= first_slice_zb % self.settings.data_discs
         set_number_zb = math.floor(first_slice_zb /
@@ -613,10 +613,45 @@ About the files that may be on this disc:
                        pars_hereafter)
         if last_slice_zb is None:
             max_last_slice_zb = parity_sets_hereafter[-1][-1]
-            # insert smarts here. for now we just get all the stuff in
-            # the set.
-            last_slice_zb = max_last_slice_zb
-        
+            if (max_last_slice_zb - first_slice_zb) < (
+                    0.5 * self.settings.slices_per_set):
+                # no use being smart
+                self.log.debug('less than half a set left, fetching the rest')
+                last_slice_zb = max_last_slice_zb
+            else:
+                try:
+                    with open(os.path.join(self.settings.scratch_dir,
+                                           'last_fetched_fraction.txt')) as f:
+                        last_fetched_set_zb = int(f.readline())
+                        last_fetched_fraction = float(f.readline())
+                except FileNotFoundError:
+                    last_fetched_set_zb = set_number_zb
+                    last_fetched_fraction = 0.03
+                if last_fetched_set_zb != set_number_zb:
+                    # this file is out of date
+                    last_fetched_set_zb = set_number_zb
+                    last_fetched_fraction = 0.03
+                to_fetch_fraction = last_fetched_fraction * 3
+                self.log.debug('this time we are fetching %6.3f of a set',
+                               to_fetch_fraction)
+                max_to_fetch = int((to_fetch_fraction *
+                                    self.settings.slices_per_set) + 1)
+                last_slice_zb = min(max_last_slice_zb,
+                                    first_slice_zb + max_to_fetch)
+                with open(os.path.join(self.settings.scratch_dir,
+                                       'last_fetched_fraction.txt'), 'wt') as f:
+                    print(last_fetched_set_zb, file=f)
+                    print(to_fetch_fraction, file=f)
+        # we need entire parity sets, so if last_slice_zb is in the
+        # middle of a set, we end at the end of the set
+        for a, b in parity_sets_hereafter:
+            if last_slice_zb >= a and last_slice_zb <= b:
+                last_slice_zb = b
+                break
+        else:
+            self.log.error('could not find which parity set slice %d is in',
+                           last_slice_zb)
+        self.log.debug('last_slice_zb is %d', last_slice_zb)
         for disc_zb in range(self.settings.total_set_count):
             disc_title = self.disc_title(basename, set_number_zb, disc_zb)
             disc_dir = self.written_disc_directory(disc_title)
@@ -631,8 +666,9 @@ About the files that may be on this disc:
                     if a >= first_slice_zb and b <= last_slice_zb:
                         shutil.copyfile(os.path.join(disc_dir, f),
                                         os.path.join(self.settings.scratch_dir, f))
-        for parfilename in pars_hereafter:
-            self._run('parchive', 'r', parfilename)
+        for (a,b), parfilename in zip(parity_sets_hereafter, pars_hereafter):
+            if a >= first_slice_zb and b <= last_slice_zb:
+                self._run('parchive', 'r', parfilename)
 
     def _extract(self, dir, basename, number, extension, happening):
         number = int(number)
@@ -646,7 +682,8 @@ About the files that may be on this disc:
                 # the first time this gets called with a real number,
                 # happening is still 'init' so the hawkeyed will see
                 # one of these messages before we go back to set 1
-                self.log.debug('the file for slice %s already exists', number)
+                self.log.debug('the file for slice (ob) %s already exists',
+                               number)
                 return
             else:
                 self._fetch_some_slices(basename, number)
@@ -1248,7 +1285,7 @@ class TestWholeRestore(UsesTempScratchDir):
         # being invalid or missing
 
     def mock__run(self, *args):
-        # self.log.debug('args are %r', args)
+        self.log.debug('args are %r', args)
         if args[0] == 'dar':
             self.mock_dar(*args)
         elif args[0] == 'parchive':
