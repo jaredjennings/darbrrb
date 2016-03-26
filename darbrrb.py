@@ -1334,6 +1334,85 @@ class TestWholeRestoreNineteenPlusSeven(TestWholeRestore):
 
 
 
+@patch.object(Darbrrb, '_run')
+class TestPartialRestore(TestWholeRestore):
+    def setUp(self):
+        super().setUp()
+        # now, unlike the full restore, we will not ask for every
+        # slice. just some toward the end of the first set, and into
+        # the second set.
+        s = self.settings
+        # the first fetch will do 9% of the slices; make it fetch
+        # twice from the first set
+        self.first_slice_dar_requests = int(s.slices_per_set * (1 - 0.14))
+        # and only once from the beginning of the second set
+        self.last_slice_dar_requests = int(s.slices_per_set * (1 + 0.08))
+
+    def mock_dar(self, *args):
+        # set self.dar_consume_slices_count before you run this method
+        #
+        # we assume here that dar is being called to extract the archive
+        # args goes like dar -x basename -R root_of_files_to_save
+        dir = args[-1]
+        basename = args[2]
+        # get last slice
+        self.d._extract(dir, basename, '0', 'dar', 'init')
+        self.d._extract(dir, basename, self.dar_consume_slices_count, 'dar', 'init')
+        for slice in range(self.first_slice_dar_requests,
+                           self.last_slice_dar_requests + 1):
+            # slice is zero-based but dar is one-based
+            self.d._extract(dir, basename, str(slice+1), 'dar', 'operating')
+
+    # we are testing a partial restore, but deriving from the whole
+    # restore class. if we do not call this method testWholeRestore,
+    # the superclass's test method will remain.
+    def testWholeRestore(self, _run):
+        dir = 'dir'
+        _run.side_effect = self.mock__run
+        # we run parchive once to get the last slice. then,
+        #
+        # for each complete or partial (at end) set of {data_discs} dar files,
+        # we run parchive once
+        sett = self.settings
+        fsdrzb = self.first_slice_dar_requests - 1
+        lsdrzb = self.last_slice_dar_requests - 1
+        first_slice_fetched_zb = fsdrzb - fsdrzb % sett.data_discs
+        # this simple math below only works because we are certainly
+        # not running into the last parity set; that set can be incomplete.
+        last_slice_fetched_zb = (lsdrzb - lsdrzb % sett.data_discs +
+                                 sett.data_discs - 1)
+        complete_parity_sets = (last_slice_fetched_zb + 1 - 
+                                first_slice_fetched_zb) // sett.data_discs
+        expected_pars_run = (1 + # for the last slice
+                             complete_parity_sets)
+        # --- run code
+        self.d.dar('-x', self.basename, '-R', '/fnord', 'some-file')
+        # --- assertions
+        self.log.debug('calls:')
+        for c in self.d._run.call_args_list:
+            self.log.debug('%r', c)
+        def calls_running(executable):
+            return list(x for x in self.d._run.call_args_list 
+                    if x[0][0] == executable)
+        self.log.debug(calls_running('parchive'))
+        self.assertEqual(len(calls_running('parchive')), expected_pars_run)
+        # not tested so far:
+        # * only the files for one set are in the scratch dir at once
+
+class TestPartialRestoreThreePlusEight(TestPartialRestore):
+    data_discs = 3
+    parity_discs = 8
+    slices_per_disc = 13 
+    pretend_free_space_MiB = (data_discs + parity_discs) * 25000
+
+class TestPartialRestoreNineteenPlusSeven(TestPartialRestore):
+    data_discs = 19
+    parity_discs = 7
+    slices_per_disc = 31
+    pretend_free_space_MiB = (data_discs + parity_discs) * 25000
+
+
+
 if __name__ == '__main__':
     s = Settings()
     if len(sys.argv) < 2:
