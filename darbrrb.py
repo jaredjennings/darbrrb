@@ -263,6 +263,7 @@ class Darbrrb:
             self.log.info('running command {!r}'.format(args))
             try:
                 subprocess.check_call(args)
+                try_again = False
             except subprocess.CalledProcessError as e:
                 self.log.exception('an error was encountered '
                                    'when running command {!r}'.format(args))
