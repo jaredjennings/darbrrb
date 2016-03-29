@@ -195,7 +195,7 @@ growisofs 7.1; genisoimage 1.1.11.
 
 * If you are encrypting, you need change 8e64f413. If you have dar
 2.5.4 or later, you have change 8e64f413. If you don't (2.5.4 is not
-yet released as of this writing), you will need to build the
+yet released as of March 2016), you will need to build the
 branch_2.5.x branch of dar yourself. See
 <https://sourceforge.net/p/dar/bugs/183/> and
 <https://sourceforge.net/p/dar/code/ci/8e64f413deb046064156792078060d2ee6ea4e5c/>.
@@ -216,15 +216,16 @@ Dar parameters of note:
     Creating archive:   -c <archive basename> -R <dir with files to backup>
     Extracting archive: -x <archive basename>
 
-See dar(1) about parameters you can give to dar. Don't get fancy: only use
-the ones that tell dar which mode to operate in, and which files to
-archive.  Otherwise this script will not form a complete record of how dar
-was run.
+You get 23 characters for the archive basename. (Sorry, that's ISO
+9660.) See dar(1) about parameters you can give to dar. Don't get
+fancy: only use the ones that tell dar which mode to operate in, and
+which files to archive.  Otherwise this script will not form a
+complete record of how dar was run.
 
 The -v switch, before dar, means to be verbose and show the dar command
 being executed and the darrc used. The -n switch, before dar, means don't
 burn any discs: just make directories containing the files that would have
-been burned.
+been burned. (This can use much more scratch space.)
 
 """.format(s=settings, progname=sys.argv[0]),
         file=sys.stderr)
