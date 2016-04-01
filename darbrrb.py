@@ -1433,6 +1433,13 @@ if __name__ == '__main__':
             loglevel -= 10
         elif o == '-n':
             s.actually_burn = False
+            # warn user
+            from time import sleep
+            for i in range(25):
+                for j in range(4):
+                    print('not actually burning', end=' * ')
+                print('\n')
+            sleep(5)
         elif o == '-t':
             loglevel = logging.DEBUG
             testing = True
