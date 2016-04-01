@@ -689,6 +689,8 @@ About the files that may be on this disc:
                 return
             else:
                 self._fetch_some_slices(basename, number)
+
+    _list = _extract
         
 
 class TestDigits(unittest.TestCase):
@@ -1469,6 +1471,8 @@ if __name__ == '__main__':
             d._create(*remaining[1:])
         elif remaining[0] == '_extract':
             d._extract(*remaining[1:])
+        elif remaining[0] == '_list':
+            d._list(*remaining[1:])
         else:
             raise Exception("unknown subcommand", remaining)
         log.debug('execution ended without exception')
