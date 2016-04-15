@@ -15,6 +15,7 @@ class OFUD2:
     Drive = TOP + '.Drive'
 
 OFDOM = 'org.freedesktop.DBus.ObjectManager'
+OFUDENACO = 'org.freedesktop.UDisks2.Error.NotAuthorizedCanObtain'
 
 def process(q):
     FORMAT = '%(asctime)-15s %(levelname)s %(name)s %(message)s'
@@ -65,12 +66,16 @@ def process(q):
                         obj = bus.get_object(OFUD2.TOP, bus_name)
                         fsi = dbus.Interface(obj, OFUD2.Filesystem)
                         log.info('fs detected on {}, mounting'.format(bus_name))
-                        mtpt = fsi.mount()
-                        log.info('mounted at {}'.format(mtpt))
-                        q.put(('filesystem', mtpt))
+                        try:
+                            mtpt = fsi.Mount({'auth.no_user_interaction': True})
+                            log.info('mounted at {}'.format(mtpt))
+                            q.put(('filesystem', mtpt))
+                        except dbus.exceptions.DBusException as e:
+                            self.log.error('mount failed: {}: {}'.format(
+                                e.get_dbus_name(), e.get_dbus_message())
         bus.add_signal_receiver(added, 'InterfacesAdded', OFDOM,
                                 path=OFUD2Path)
-                        
+
     top.debug('enumerating devices')
     erthing = ud_om.GetManagedObjects()
     for name, info in erthing.items():
