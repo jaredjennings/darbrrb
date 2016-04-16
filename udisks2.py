@@ -17,6 +17,12 @@ class OFUD2:
 OFDOM = 'org.freedesktop.DBus.ObjectManager'
 OFUDENACO = 'org.freedesktop.UDisks2.Error.NotAuthorizedCanObtain'
 
+def eject(drive_bus_name):
+    bus = dbus.SystemBus()
+    obj = bus.get_object(OFUD2.Drive, drive_bus_name)
+    di = dbus.Interface(obj, OFUD2.Drive)
+    di.Eject()
+
 def process(q):
     FORMAT = '%(asctime)-15s %(levelname)s %(name)s %(message)s'
     logging.basicConfig(format=FORMAT, stream=sys.stderr, level=logging.DEBUG)
@@ -46,7 +52,7 @@ def process(q):
                               'inserted.'.format(media_type))
                 if media_good(media_type):
                     # proper kind of empty disc inserted
-                    q.put(('blank', device_file))
+                    q.put(('blank', device_file, bus_name))
                 else:
                     log.info('The medium was not of the desired type.')
                 for k, v in changed.items():
@@ -54,22 +60,22 @@ def process(q):
         bus.add_signal_receiver(changed, 'PropertiesChanged',
                                 dbus.PROPERTIES_IFACE, path=bus_name)
 
-    def listen_and_mount_data_discs(bus_name):
+    def listen_and_mount_data_discs(block_bus_name, drive_bus_name):
         log = logging.getLogger(__name__+'.listen_and_mount_data_discs')
         def added(object_path, interfaces_and_properties):
             log.debug('InterfacesAdded event')
             log.debug(object_path)
             log.debug(repr(interfaces_and_properties))
-            if object_path == bus_name:
+            if object_path == block_bus_name:
                 for ifname, properties in interfaces_and_properties.items():
                     if ifname == OFUD2.Filesystem:
-                        obj = bus.get_object(OFUD2.TOP, bus_name)
+                        obj = bus.get_object(OFUD2.TOP, block_bus_name)
                         fsi = dbus.Interface(obj, OFUD2.Filesystem)
-                        log.info('fs detected on {}, mounting'.format(bus_name))
+                        log.info('fs detected on {}, mounting'.format(block_bus_name))
                         try:
                             mtpt = fsi.Mount({'auth.no_user_interaction': True})
                             log.info('mounted at {}'.format(mtpt))
-                            q.put(('filesystem', mtpt))
+                            q.put(('filesystem', mtpt, drive_bus_name))
                         except dbus.exceptions.DBusException as e:
                             self.log.error('mount failed: {}: {}'.format(
                                 e.get_dbus_name(), e.get_dbus_message())
@@ -94,7 +100,7 @@ def process(q):
                         top.info('drive with removable '
                                  'optical media {}'.format(device_file_name))
                         listen_for_empties(drive_path, device_file_name)
-                        listen_and_mount_data_discs(name)
+                        listen_and_mount_data_discs(name, drive_path)
     loop = GObject.MainLoop()
     loop.run()
 
