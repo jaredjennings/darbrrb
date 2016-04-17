@@ -19,9 +19,9 @@ OFUDENACO = 'org.freedesktop.UDisks2.Error.NotAuthorizedCanObtain'
 
 def eject(drive_bus_name):
     bus = dbus.SystemBus()
-    obj = bus.get_object(OFUD2.Drive, drive_bus_name)
+    obj = bus.get_object(OFUD2.TOP, drive_bus_name)
     di = dbus.Interface(obj, OFUD2.Drive)
-    di.Eject()
+    di.Eject({})
 
 def process(q):
     FORMAT = '%(asctime)-15s %(levelname)s %(name)s %(message)s'
@@ -52,7 +52,7 @@ def process(q):
                               'inserted.'.format(media_type))
                 if media_good(media_type):
                     # proper kind of empty disc inserted
-                    q.put(('blank', device_file, bus_name))
+                    q.put(('blank', str(device_file), str(bus_name)))
                 else:
                     log.info('The medium was not of the desired type.')
                 for k, v in changed.items():
@@ -75,10 +75,11 @@ def process(q):
                         try:
                             mtpt = fsi.Mount({'auth.no_user_interaction': True})
                             log.info('mounted at {}'.format(mtpt))
-                            q.put(('filesystem', mtpt, drive_bus_name))
+                            q.put(('filesystem', str(mtpt),
+                                   str(drive_bus_name)))
                         except dbus.exceptions.DBusException as e:
                             self.log.error('mount failed: {}: {}'.format(
-                                e.get_dbus_name(), e.get_dbus_message())
+                                e.get_dbus_name(), e.get_dbus_message()))
         bus.add_signal_receiver(added, 'InterfacesAdded', OFDOM,
                                 path=OFUD2Path)
 
