@@ -23,7 +23,7 @@ def eject(drive_bus_name):
     di = dbus.Interface(obj, OFUD2.Drive)
     di.Eject({})
 
-def process(q):
+def process(q, media_types=()):
     FORMAT = '%(asctime)-15s %(levelname)s %(name)s %(message)s'
     logging.basicConfig(format=FORMAT, stream=sys.stderr, level=logging.DEBUG)
     top = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ def process(q):
                                 for z in drive_getall['MediaCompatibility'])):
                         top.info('drive with removable '
                                  'optical media {}'.format(device_file_name))
-                        listen_for_empties(drive_path, device_file_name)
+                        listen_for_empties(drive_path, device_file_name, media_types)
                         listen_and_mount_data_discs(name, drive_path)
     loop = GObject.MainLoop()
     loop.run()
