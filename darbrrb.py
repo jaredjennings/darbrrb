@@ -288,6 +288,10 @@ class Darbrrb:
                     if not valid_input:
                         print('Did not understand your input. Asking again.')
 
+    # for mockability
+    def _copy(self, source, destination):
+        shutil.copyfile(source, destination)
+
     @property
     def darrc_contents(self):
         progargs = []
@@ -473,9 +477,9 @@ About the files that may be on this disc:
                     self.disc_dir(disc)))
         self.ensure_free_space()
         # this is the copy of this program that dar will run
-        shutil.copyfile(self.progname,
-                os.path.join(self.settings.scratch_dir,
-                        os.path.basename(self.progname)))
+        self._copy(self.progname,
+                   os.path.join(self.settings.scratch_dir,
+                                os.path.basename(self.progname)))
 
     def _par_filename(self, basename, min_number, max_number):
         parformat = "{{}}.{0}-{0}.par".format(self.settings.number_format)
@@ -522,11 +526,11 @@ About the files that may be on this disc:
             par_volumes = [f for f in os.listdir()
                            if parity_volume_re.match(f)]
             for d in self.disc_dirs():
-                shutil.copyfile(parfilename, os.path.join(d, parfilename))
+                self._copy(parfilename, os.path.join(d, parfilename))
                 with io.open(os.path.join(d, 'README.txt'), 'wt') as readme:
                     readme.write(self.readme(basename))
                 this_program = os.path.basename(self.progname)
-                shutil.copyfile(this_program, os.path.join(d, this_program))
+                self._copy(this_program, os.path.join(d, this_program))
             data_dirs = itertools.cycle(self.disc_dir(i+1)
                     for i in range(self.settings.data_discs))
             redundancy_dirs = itertools.cycle(self.disc_dir(i+1)
@@ -661,13 +665,13 @@ About the files that may be on this disc:
                 if f.endswith('.dar'):
                     n = self._number_from_slice_name_zb(f)
                     if n >= first_slice_zb and n <= last_slice_zb:
-                        shutil.copyfile(os.path.join(disc_dir, f),
-                                        os.path.join(self.settings.scratch_dir, f))
+                        self._copy(os.path.join(disc_dir, f),
+                                   os.path.join(self.settings.scratch_dir, f))
                 elif parity_volume_re.match(f):
                     a, b = self._numbers_from_par_filename_zb(f)
                     if a >= first_slice_zb and b <= last_slice_zb:
-                        shutil.copyfile(os.path.join(disc_dir, f),
-                                        os.path.join(self.settings.scratch_dir, f))
+                        self._copy(os.path.join(disc_dir, f),
+                                   os.path.join(self.settings.scratch_dir, f))
         for (a,b), parfilename in zip(parity_sets_hereafter, pars_hereafter):
             if a >= first_slice_zb and b <= last_slice_zb:
                 self._run('parchive', 'r', parfilename)
