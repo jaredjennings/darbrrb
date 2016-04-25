@@ -1154,6 +1154,7 @@ class TestReallySmallDiscs(TestWholeBackup):
 
 
 @patch.object(Darbrrb, '_run')
+@patch.object(Darbrrb, '_copy')
 class TestWholeRestore(UsesTempScratchDir):
     data_discs = 4
     parity_discs = 1
@@ -1301,9 +1302,10 @@ class TestWholeRestore(UsesTempScratchDir):
         else:
             raise Exception('unknown command run under test', args)
 
-    def testWholeRestore(self, _run):
+    def testWholeRestore(self, _copy, _run):
         dir = 'dir'
         _run.side_effect = self.mock__run
+        _copy.side_effect = shutil.copyfile
         # we run parchive once to get the last slice. then,
         #
         # for each complete or partial (at end) set of {data_discs} dar files,
@@ -1323,6 +1325,11 @@ class TestWholeRestore(UsesTempScratchDir):
             return list(x for x in self.d._run.call_args_list 
                     if x[0][0] == executable)
         self.log.debug(calls_running('parchive'))
+        self.assertEqual(len(list(c for c in self.d._copy.call_args_list
+                                  if os.path.basename(c[0][0]).endswith('.par'))),
+                         (self.dar_consume_slices_count //
+                          self.settings.data_discs) + 1,
+                         'unexpected number of pars copied')
         self.assertEqual(len(calls_running('parchive')), expected_pars_run)
         # not tested so far:
         # * only the files for one set are in the scratch dir at once
@@ -1445,7 +1452,7 @@ if __name__ == '__main__':
                 print('\n')
             sleep(5)
         elif o == '-t':
-            loglevel = logging.DEBUG
+            loglevel = logging.INFO
             testing = True
         else:
             raise Exception('unknown switch {}'.format(o))
