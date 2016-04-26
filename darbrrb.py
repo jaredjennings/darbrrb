@@ -672,6 +672,10 @@ About the files that may be on this disc:
                     if a >= first_slice_zb and b <= last_slice_zb:
                         self._copy(os.path.join(disc_dir, f),
                                    os.path.join(self.settings.scratch_dir, f))
+                elif f.endswith('.par'):
+                    if f in pars_hereafter:
+                        self._copy(os.path.join(disc_dir, f),
+                                   os.path.join(self.settings.scratch_dir, f))
         for (a,b), parfilename in zip(parity_sets_hereafter, pars_hereafter):
             if a >= first_slice_zb and b <= last_slice_zb:
                 self._run('parchive', 'r', parfilename)
@@ -787,7 +791,7 @@ class UsesTempScratchDir(unittest.TestCase):
     def touch_par_file_in_output_dir(self, dir, basename, min_, max_):
         fn = os.path.join(dir,
                           self.par_main_format.format(basename, min_, max_))
-        self.log.debug('touching %r', fn)
+        #self.log.debug('touching %r', fn)
         self.touch(fn)
 
 
@@ -1324,11 +1328,15 @@ class TestWholeRestore(UsesTempScratchDir):
         def calls_running(executable):
             return list(x for x in self.d._run.call_args_list 
                     if x[0][0] == executable)
-        self.log.debug(calls_running('parchive'))
-        self.assertEqual(len(list(c for c in self.d._copy.call_args_list
-                                  if os.path.basename(c[0][0]).endswith('.par'))),
-                         (self.dar_consume_slices_count //
-                          self.settings.data_discs) + 1,
+        #self.log.debug(calls_running('parchive'))
+        unique_basenames_copied = sorted(list(set(
+            [os.path.basename(c[0][0]) for c in self.d._copy.call_args_list])))
+        self.log.debug('unique basenames copied: %r', unique_basenames_copied)
+        self.assertEqual(len([b for b in unique_basenames_copied
+                              if b.endswith('.par')]),
+                         ((self.dar_consume_slices_count +
+                           self.settings.data_discs-1) //
+                          self.settings.data_discs),
                          'unexpected number of pars copied')
         self.assertEqual(len(calls_running('parchive')), expected_pars_run)
         # not tested so far:
@@ -1452,7 +1460,7 @@ if __name__ == '__main__':
                 print('\n')
             sleep(5)
         elif o == '-t':
-            loglevel = logging.INFO
+            loglevel = logging.DEBUG
             testing = True
         else:
             raise Exception('unknown switch {}'.format(o))
