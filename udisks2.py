@@ -23,7 +23,7 @@ def eject(drive_bus_name):
     di = dbus.Interface(obj, OFUD2.Drive)
     di.Eject({})
 
-def process(q, media_types=()):
+def listen_for_empties_process(q, media_types=()):
     FORMAT = '%(asctime)-15s %(levelname)s %(name)s %(message)s'
     logging.basicConfig(format=FORMAT, stream=sys.stderr, level=logging.DEBUG)
     top = logging.getLogger(__name__)
@@ -59,6 +59,41 @@ def process(q, media_types=()):
                     log.debug('{} is now {!r}'.format(k, v))
         bus.add_signal_receiver(changed, 'PropertiesChanged',
                                 dbus.PROPERTIES_IFACE, path=bus_name)
+
+
+    top.debug('enumerating devices')
+    erthing = ud_om.GetManagedObjects()
+    for name, info in erthing.items():
+        for interface_name, getall in info.items():
+            if interface_name == OFUD2.Block:
+                device_file_name = (bytes(getall['Device']).
+                                    rstrip(b'\x00').decode('ascii'))
+                drive_path = getall['Drive']
+                if drive_path != '/': # if it is, this Block has no Drive
+                    drive_getall = erthing[drive_path][OFUD2.Drive]
+                    if (
+                            drive_getall['MediaRemovable'] and
+                            drive_getall['MediaChangeDetected'] and 
+                            any(z.startswith('optical')
+                                for z in drive_getall['MediaCompatibility'])):
+                        top.info('drive with removable '
+                                 'optical media {}'.format(device_file_name))
+                        listen_for_empties(drive_path, device_file_name, media_types)
+    loop = GObject.MainLoop()
+    loop.run()
+
+def listen_and_mount_process(q, media_types=()):
+    FORMAT = '%(asctime)-15s %(levelname)s %(name)s %(message)s'
+    logging.basicConfig(format=FORMAT, stream=sys.stderr, level=logging.DEBUG)
+    top = logging.getLogger(__name__)
+
+    top.debug('beginning')
+    DBusGMainLoop(set_as_default=True)
+
+    # http://stackoverflow.com/questions/5067005/python-udisks-enumerating-device-information
+    bus = dbus.SystemBus()
+    ud_om_obj = bus.get_object(OFUD2.TOP, '/org/freedesktop/UDisks2')
+    ud_om = dbus.Interface(ud_om_obj, OFDOM)
 
     def listen_and_mount_data_discs(block_bus_name, drive_bus_name):
         log = logging.getLogger(__name__+'.listen_and_mount_data_discs')
@@ -100,7 +135,6 @@ def process(q, media_types=()):
                                 for z in drive_getall['MediaCompatibility'])):
                         top.info('drive with removable '
                                  'optical media {}'.format(device_file_name))
-                        listen_for_empties(drive_path, device_file_name, media_types)
                         listen_and_mount_data_discs(name, drive_path)
     loop = GObject.MainLoop()
     loop.run()
