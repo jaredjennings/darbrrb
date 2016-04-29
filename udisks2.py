@@ -23,7 +23,7 @@ def eject(drive_bus_name):
     di = dbus.Interface(obj, OFUD2.Drive)
     di.Eject({})
 
-def listen_for_empties_process(q, media_types=()):
+def wait_for_empty_disc_process(q, device_file_name, media_types=()):
     FORMAT = '%(asctime)-15s %(levelname)s %(name)s %(message)s'
     logging.basicConfig(format=FORMAT, stream=sys.stderr, level=logging.DEBUG)
     top = logging.getLogger(__name__)
@@ -35,24 +35,29 @@ def listen_for_empties_process(q, media_types=()):
     bus = dbus.SystemBus()
     ud_om_obj = bus.get_object(OFUD2.TOP, '/org/freedesktop/UDisks2')
     ud_om = dbus.Interface(ud_om_obj, OFDOM)
+    loop = GObject.MainLoop()
+
+    blank_disc_inserted = lambda getall: (
+        getall.get('MediaAvailable', False) and
+        getall.get('Optical', False) and
+        getall.get('OpticalBlank', True))
+
+    if len(media_types) == 0:
+        media_good = lambda getall: True
+    else:
+        media_good = lambda getall: getall.get('Media', '') in media_types
 
     def listen_for_empties(bus_name, device_file, media_types=()):
         log = logging.getLogger(__name__+'.listen_for_empties')
-        if len(media_types) == 0:
-            media_good = lambda x: True
-        else:
-            media_good = lambda x: x in media_types
         def changed(interface_name, changed, invalidated):
-            if (
-                    changed.get('MediaAvailable', False) and
-                    changed.get('Optical', False) and
-                    changed.get('OpticalBlank', False)):
+            if optical_disc_inserted(changed):
                 media_type = changed.get('Media', '')
                 log.info('A medium of type {} was '
                               'inserted.'.format(media_type))
                 if media_good(media_type):
                     # proper kind of empty disc inserted
                     q.put(('blank', str(device_file), str(bus_name)))
+                    loop.quit()
                 else:
                     log.info('The medium was not of the desired type.')
                 for k, v in changed.items():
@@ -60,27 +65,41 @@ def listen_for_empties_process(q, media_types=()):
         bus.add_signal_receiver(changed, 'PropertiesChanged',
                                 dbus.PROPERTIES_IFACE, path=bus_name)
 
-
-    top.debug('enumerating devices')
     erthing = ud_om.GetManagedObjects()
+    satisfied = False
     for name, info in erthing.items():
         for interface_name, getall in info.items():
             if interface_name == OFUD2.Block:
-                device_file_name = (bytes(getall['Device']).
-                                    rstrip(b'\x00').decode('ascii'))
-                drive_path = getall['Drive']
-                if drive_path != '/': # if it is, this Block has no Drive
-                    drive_getall = erthing[drive_path][OFUD2.Drive]
-                    if (
-                            drive_getall['MediaRemovable'] and
-                            drive_getall['MediaChangeDetected'] and 
-                            any(z.startswith('optical')
-                                for z in drive_getall['MediaCompatibility'])):
-                        top.info('drive with removable '
-                                 'optical media {}'.format(device_file_name))
-                        listen_for_empties(drive_path, device_file_name, media_types)
-    loop = GObject.MainLoop()
-    loop.run()
+                getall_devfn = (bytes(getall['Device']).
+                                rstrip(b'\x00').decode('ascii'))
+                if getall_devfn == device_file_name:
+                    drive_path = getall['Drive']
+                    if drive_path != '/': # if it is, this Block has no Drive
+                        drive_getall = erthing[drive_path][OFUD2.Drive]
+                        if (
+                                drive_getall['MediaRemovable'] and
+                                drive_getall['MediaChangeDetected'] and 
+                                any(z.startswith('optical')
+                                    for z in drive_getall['MediaCompatibility'])):
+                            top.info('drive with removable '
+                                     'optical media {}'.format(device_file_name))
+                            # if there is already a suitable disc, we
+                            # do not want to wait for one
+                            if (blank_disc_inserted(drive_getall) and
+                                media_good(drive_getall)):
+                                top.info('suitable disc already inserted')
+                                q.put(('blank', str(device_file_name),
+                                       str(drive_path)))
+                                satisfied = True
+                            else:
+                                top.info('waiting for a blank disc '
+                                         'in device %r, of one of '
+                                         'these types: %r', device_file_name,
+                                         media_types or 'any')
+                                listen_for_empties(drive_path, device_file_name,
+                                                   media_types)
+    if not satisfied:
+        loop.run()
 
 def listen_and_mount_process(q, media_types=()):
     FORMAT = '%(asctime)-15s %(levelname)s %(name)s %(message)s'
