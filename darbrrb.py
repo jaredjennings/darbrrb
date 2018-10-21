@@ -74,7 +74,8 @@ class Settings:
 
 # How much space is on a disc?
     # BluRay
-    disc_size_MiB = 23841
+    # https://superuser.com/a/565999 "256MB for defect management"
+    disc_size_MiB = 23841 - 256
     # DVD
     ## disc_size_MiB = 4482
     # CD-R
